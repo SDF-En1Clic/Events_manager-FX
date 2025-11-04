@@ -96,28 +96,6 @@ def graph_filtered_items(site_id, list_id, token, filter_expr=None):
 
     return results
 
-
-
-
-def get_graph_token(tenant_id, client_id, client_secret):
-    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-    data = {
-        "grant_type": "client_credentials",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "scope": "https://graph.microsoft.com/.default"
-    }
-    response = requests.post(url, data=data)
-    logging.info(f"Get token Response : {response.content}")
-    return response.json().get("access_token")
-
-app = func.FunctionApp()
-
-def parse_float(value):
-    try:
-        return float(value)
-    except:
-        return 0
 # --- NOUVELLE FONCTION AJOUTÉE (version avec logging) ---
 def get_site_name(site_id, token):
     """
@@ -157,10 +135,58 @@ def get_site_name(site_id, token):
     return None
 # --- FIN DE LA FONCTION AJOUTÉE ---
 
+# --- NOUVELLE FONCTION POUR VÉRIFIER LE NOM DE LA LISTE ---
+def get_list_name(site_id, list_id, token):
+    """
+    Récupère le nom d'affichage d'une liste SharePoint à partir de son ID.
+    """
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        res = requests.get(url, headers=headers)
+        res.raise_for_status()
+        data = res.json()
+        list_name = data.get('displayName') or data.get('name')
+        return list_name
+    except requests.exceptions.HTTPError as http_err:
+        logging.error(f"Erreur HTTP lors de la récupération du nom de la liste {list_id}: {http_err}")
+    except Exception as err:
+        logging.error(f"Erreur lors de la récupération du nom de la liste {list_id}: {err}")
+    return None
+# --- FIN DE LA FONCTION AJOUTÉE ---
+
+
+def get_graph_token(tenant_id, client_id, client_secret):
+    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": "https://graph.microsoft.com/.default"
+    }
+    response = requests.post(url, data=data)
+    logging.info(f"Get token Response : {response.content}")
+    return response.json().get("access_token")
+
+app = func.FunctionApp()
+
+def parse_float(value):
+    try:
+        return float(value)
+    except:
+        return 0
+
+
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
         commande_id = body.get("commande_id")
+                # --- LOG AJOUTÉ ---
+        logging.info(f"Paramètre 'commande_id' reçu : {commande_id}")
         if not commande_id:
             return func.HttpResponse("Paramètre 'commande_id' requis", status_code=400)
 
@@ -193,6 +219,19 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         except Exception as e:
             logging.warning(f"Erreur lors de la vérification du nom du site: {e}")
         # --- FIN DE LA VÉRIFICATION ---
+
+        # --- VÉRIFICATION DU NOM DE LA LISTE (AJOUTÉ) ---
+        try:
+            nom_liste = get_list_name(site_id, commandes_list_id, token)
+            if nom_liste:
+                logging.info(f"Tentative de récupération de la commande depuis la liste: '{nom_liste}' (ID: {commandes_list_id})")
+            else:
+                logging.warning(f"Impossible de vérifier le nom de la liste pour l'ID: {commandes_list_id}")
+        except Exception as e:
+            logging.warning(f"Erreur lors de la vérification du nom de la liste: {e}")
+        # --- FIN VÉRIFICATION LISTE ---
+
+        logging.info(f"Récupération de la commande ID: {commande_id}")
 
         # --- Données
         try:
