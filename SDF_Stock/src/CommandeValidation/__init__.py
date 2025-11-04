@@ -81,14 +81,24 @@ def graph_filtered_items(site_id, list_id, token, filter_expr=None):
 
     if filter_expr:
         # S'assurer que le filtre est encodé proprement 
-        filter_param = urllib.parse.quote(filter_expr, safe="=()/")  # ne pas échapper les () ni eq
+        filter_param = urllib.parse.quote(filter_expr, safe="=()/ ")  # ne pas échapper les () ni eq, ni espaces
         base_url += f"&$filter={filter_param}"
 
     results = []
     url = base_url
 
+    # --- AJOUT DE LOG (MODIFIÉ) ---
+    logging.info(f"Appel Graph API (filtré): {url}")
+    # --- FIN AJOUT ---
+
     while url:
         res = requests.get(url, headers=headers)
+        
+        # --- AJOUT DE LOG D'ERREUR ---
+        if not res.ok: 
+             logging.error(f"Erreur API Graph (filtré). Status: {res.status_code}. Réponse: {res.text}")
+        # --- FIN AJOUT ---
+
         res.raise_for_status()
         data = res.json()
         results.extend(data.get("value", []))
