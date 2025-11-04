@@ -80,7 +80,7 @@ def graph_filtered_items(site_id, list_id, token, filter_expr=None):
     }
 
     if filter_expr:
-        # S'assurer que le filtre est encodé proprement
+        # S'assurer que le filtre est encodé proprement 
         filter_param = urllib.parse.quote(filter_expr, safe="=()/")  # ne pas échapper les () ni eq
         base_url += f"&$filter={filter_param}"
 
