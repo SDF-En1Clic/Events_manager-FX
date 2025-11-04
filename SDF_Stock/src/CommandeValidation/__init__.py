@@ -235,7 +235,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         # --- Données
         try:
-            commande_items = graph_filtered_items(site_id, commandes_list_id, token, f"ID eq {commande_id}")
+            commande_items = graph_filtered_items(site_id, commandes_list_id, token, f"fields/id eq {commande_id}")
             if not commande_items:
                 return func.HttpResponse("Commande introuvable", status_code=404)
             commande = commande_items[0]["fields"]
