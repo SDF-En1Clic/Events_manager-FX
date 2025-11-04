@@ -1,0 +1,67 @@
+name: Build and deploy Python project to Azure Function App - SDFCalculStock
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: './SDF_Stock/'
+  AZURE_FUNCTIONAPP_NAME: 'SDFCalculStockV2'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+
+    steps:
+      - name: 'Install zip'
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: 🔁 Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.11'
+              
+      - name: 'List directory contents before pip install'
+        run: |
+          ls -R ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+
+      - name: 📦 Install dependencies
+        shell: bash
+        run: |
+          pushd './${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}'
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt --target="./src/.python_packages/lib/site-packages"
+          popd
+
+      - name: 'List directory contents after pip install'
+        run: |
+          ls -R ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+
+      - name: 🗜️ Zip only the src folder
+        run: |
+          cd ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/src
+          zip -r ../../release.zip .
+          cd ../..
+
+      - name: 🔍 Vérifie le contenu du zip
+        run: unzip -l release.zip
+
+      - name: 🚀 Déploiement vers Azure Functions
+        uses: Azure/functions-action@v1
+        id: fa
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: './release.zip'
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+
+      - name: 'Output Azure Functions Action result'
+        if: always()
+        run: |
+          echo "Deployment Result: ${{ steps.fa.outcome }}"
+          echo "Deployment Output: ${{ steps.fa.outputs.app-url }}"

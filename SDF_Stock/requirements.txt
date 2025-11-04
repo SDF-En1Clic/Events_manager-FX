@@ -1,0 +1,6 @@
+azure-functions
+azure-identity
+azure-keyvault-secrets
+msal
+requests
+cryptography==41.0.7 ; python_version >= "3.9" and python_version < "3.12"
