@@ -7,7 +7,7 @@ on:
 
 env:
   AZURE_FUNCTIONAPP_PACKAGE_PATH: './SDF_Stock/'
-  AZURE_FUNCTIONAPP_NAME: 'Events-manager-Function-App'
+  AZURE_FUNCTIONAPP_NAME: 'Events-manager-FX'
   PYTHON_VERSION: '3.11'
 
 jobs:
