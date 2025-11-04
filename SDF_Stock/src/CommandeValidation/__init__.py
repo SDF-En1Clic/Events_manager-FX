@@ -118,6 +118,44 @@ def parse_float(value):
         return float(value)
     except:
         return 0
+# --- NOUVELLE FONCTION AJOUTÉE (version avec logging) ---
+def get_site_name(site_id, token):
+    """
+    Récupère le nom d'affichage d'un site SharePoint à partir de son ID via l'API Graph.
+    Utilise logging pour les erreurs.
+    """
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        res = requests.get(url, headers=headers)
+        res.raise_for_status()  # Lève une exception en cas d'erreur HTTP (4xx ou 5xx)
+        
+        data = res.json()
+        
+        # Le nom du site est généralement dans 'displayName' ou 'name'
+        site_name = data.get('displayName') or data.get('name')
+        
+        if not site_name:
+            logging.warning(f"Avertissement: L'ID du site {site_id} est valide, mais n'a pas retourné de nom.")
+            
+        return site_name
+
+    except requests.exceptions.HTTPError as http_err:
+        logging.error(f"Erreur HTTP lors de la récupération du nom du site: {http_err}")
+        logging.error(f"Réponse: {res.text}")
+        if res.status_code == 404:
+            logging.error(f"Erreur: Le site avec l'ID '{site_id}' n'a pas été trouvé.")
+        elif res.status_code == 401:
+            logging.error("Erreur: Le token est invalide ou a expiré.")
+    except Exception as err:
+        logging.error(f"Une autre erreur est survenue lors de la récupération du nom du site: {err}")
+        
+    return None
+# --- FIN DE LA FONCTION AJOUTÉE ---
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
@@ -138,7 +176,23 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         arrivages_list_id = get_secret("arrivagesproduitslistid")
 
         # --- Auth
+        logging.info("Récupération du token Graph...")
         token = get_graph_token(tenant_id, client_id, client_secret)
+        if not token:
+            logging.error("Échec de l'obtention du token Graph.")
+            return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
+        logging.info("Token Graph obtenu.")
+
+        # --- VÉRIFICATION DU NOM DU SITE (AJOUTÉ) ---
+        try:
+            nom_site = get_site_name(site_id, token)
+            if nom_site:
+                logging.info(f"Connecté au site SharePoint: '{nom_site}' (ID: {site_id})")
+            else:
+                logging.warning(f"Impossible de vérifier le nom du site pour l'ID: {site_id}")
+        except Exception as e:
+            logging.warning(f"Erreur lors de la vérification du nom du site: {e}")
+        # --- FIN DE LA VÉRIFICATION ---
 
         # --- Données
         try:
