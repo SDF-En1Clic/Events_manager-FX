@@ -106,6 +106,40 @@ def graph_filtered_items(site_id, list_id, token, filter_expr=None):
 
     return results
 
+# --- NOUVELLE FONCTION AJOUTÉE ---
+def graph_get_item_by_id(site_id, list_id, item_id, token):
+    """
+    Récupère un seul élément de liste par son ID SharePoint natif.
+    C'est plus efficace qu'un filtre.
+    """
+    base_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}?$expand=fields"
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+
+    logging.info(f"Appel Graph API (Get Item by ID): {base_url}")
+
+    try:
+        res = requests.get(base_url, headers=headers)
+        
+        if not res.ok:
+            logging.error(f"Erreur API Graph (Get Item by ID). Status: {res.status_code}. Réponse: {res.text}")
+        
+        res.raise_for_status()
+        
+        return res.json()  # Renvoie l'objet item complet
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            logging.warning(f"Élément introuvable (404) à l'URL : {base_url}")
+        else:
+            logging.error(f"Erreur HTTP inattendue (Get Item by ID): {e}")
+        return None # Renvoie None en cas d'erreur HTTP (ex: 404 Not Found)
+    except Exception as e:
+        logging.error(f"Erreur non-HTTP (Get Item by ID): {e}")
+        return None
+# --- FIN DE LA NOUVELLE FONCTION ---
+
 # --- NOUVELLE FONCTION AJOUTÉE (version avec logging) ---
 def get_site_name(site_id, token):
     """
@@ -243,16 +277,27 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         logging.info(f"Récupération de la commande ID: {commande_id}")
 
-        # --- Données
+        # --- MODIFICATION: Utilisation de la nouvelle fonction Get Item by ID ---
         try:
-            commande_items = graph_filtered_items(site_id, commandes_list_id, token, f"fields/id eq {commande_id}")
-            if not commande_items:
+            commande_item = graph_get_item_by_id(site_id, commandes_list_id, token, commande_id)
+            
+            if not commande_item:
+                logging.warning(f"Commande {commande_id} introuvable (ou erreur 404).")
                 return func.HttpResponse("Commande introuvable", status_code=404)
-            commande = commande_items[0]["fields"]
+            
+            # La fonction renvoie directement l'item, pas une liste
+            commande = commande_item.get("fields") 
+            if not commande:
+                 logging.error(f"Commande {commande_id} trouvée mais le champ 'fields' est manquant.")
+                 return func.HttpResponse("Erreur de format de commande", status_code=500)
 
+            logging.info(f"Commande {commande_id} trouvée.")
 
-        except requests.exceptions.HTTPError:
-            return func.HttpResponse("Commande introuvable", status_code=404)
+        except requests.exceptions.HTTPError as e:
+            # Ce bloc ne devrait plus être atteint si graph_get_item_by_id gère les 404
+            logging.error(f"Erreur HTTP lors de la récupération de la commande: {e}")
+            return func.HttpResponse("Commande introuvable (erreur HTTP)", status_code=404)
+        # --- FIN DE LA MODIFICATION ---
 
         site_stock = commande.get("Site_Stock")
         site_stock_bis = commande.get("Site_Stock_second")
