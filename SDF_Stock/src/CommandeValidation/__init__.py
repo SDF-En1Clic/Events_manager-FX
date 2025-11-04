@@ -7,7 +7,7 @@ import urllib.parse
 import json
 from datetime import datetime
 
-# --------- CONFIG ------------
+# --------- CONFIG -------------
 VAULT_URL = "https://events-manager-kv.vault.azure.net/"  
 # -----------------------------
 
