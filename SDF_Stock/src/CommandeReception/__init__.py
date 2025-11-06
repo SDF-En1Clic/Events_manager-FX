@@ -405,7 +405,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             logging.info("    Origine du produit : %s", origine)
             
             if origine == "SDF":
-                if statut == "Rupture (SdF)":
+                if statut == "Rupture SdF":
                     # Vérifie site principal
                     batiment = None 
                     emplacement = None 
