@@ -428,7 +428,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info("   dispo = q_inv - q_resa : %s", dispo)
                 
                 if dispo >= quantite:
-                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Reservé", "Site":site_stock, "Batiment":batiment, "Emplacement":emplacement})
+                    graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Reservé", "Site":site_stock, "Batiment":batiment, "Emplacement":emplacement})
                     continue  # Produit validé dans site principal
                 
                 # Vérifie site secondaire
@@ -460,7 +460,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     logging.info("   ➤ dispo_bis = q_inv_bis - q_resa_bis : %s", dispo_bis)
                     
                     if dispo_bis >= quantite:
-                        # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Reservé", "Site":site_stock_bis, "Batiment":batiment, "Emplacement":emplacement})
+                        graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Reservé", "Site":site_stock_bis, "Batiment":batiment, "Emplacement":emplacement})
                         continue  # Produit validé dans site secondaire
 
                 # Vérifie arrivage
@@ -481,7 +481,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info("   ➤ arrivage dispo = q_arriv - q_en_cours : %s", q_arriv - q_en_cours)
                 
                 if (q_arriv - q_en_cours) >= quantite:
-                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
+                    graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
                     continue  # Arrivage prévu avant la date
                 
                 # Sinon, rupture
@@ -490,17 +490,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             else:
                 logging.info("   ➤ Produit non SDF – pas de contrôle de stock (considéré disponible)")
-                # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Commandé"})
+                graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Commandé"})
                 # Produit Ukoba : on considère "Commandé", jamais rupture
                 continue
 
         if not ruptures: 
             statut_final = "OK" 
-            # graph_update_field(site_id, commandes_list_id, commande_id, token, {"Statut": "Validé"})
+            graph_update_field(site_id, commandes_list_id, commande_id, token, {"Statut": "Validé"})
         
         else:
             statut_final = "Rupture" 
-            # graph_update_field(site_id, commandes_list_id, commande_id, token, {"Statut": "Validé (Rupture SdF)"})
+            graph_update_field(site_id, commandes_list_id, commande_id, token, {"Statut": "Validé (Rupture SdF)"})
             
         retour = {
             "commande_id": commande_id,
