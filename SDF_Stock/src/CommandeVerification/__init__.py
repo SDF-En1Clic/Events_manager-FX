@@ -405,6 +405,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     for i in inventaire
                     if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock
                 )
+
+                batiment = None 
+                emplacement = None 
+                for i in inventaire:
+                    fields = i.get("fields", {})
+                    if fields.get("Title") == reference and fields.get("Site") == site_stock:
+                        q_inv += parse_float(fields.get("Quantite"))
+                        if batiment is None:
+                            batiment = fields.get("Batiment")
+                            emplacement = fields.get("Emplacement")
+                            
                 q_resa = sum(
                     parse_float(l["fields"].get("Quantite"))
                     for l in all_details
@@ -426,11 +437,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 
                 # Vérifie site secondaire
                 if site_stock_bis and site_stock_bis != "0":
-                    q_inv_bis = sum(
-                        parse_float(i["fields"].get("Quantite"))
-                        for i in inventaire
-                        if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock_bis
-                    )
+                   
+                    batiment = None 
+                    emplacement = None 
+                    for i in inventaire:
+                        fields = i.get("fields", {})
+                        if fields.get("Title") == reference and fields.get("Site") == site_stock_bis:
+                            q_inv_bis += parse_float(fields.get("Quantite"))
+                            if batiment is None:
+                                batiment = fields.get("Batiment")
+                                emplacement = fields.get("Emplacement")
+                                
                     q_resa_bis = sum(
                         parse_float(l["fields"].get("Quantite"))
                         for l in all_details
