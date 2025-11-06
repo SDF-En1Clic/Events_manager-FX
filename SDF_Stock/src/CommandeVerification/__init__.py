@@ -408,6 +408,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
                 batiment = None 
                 emplacement = None 
+                q_inv = 0
+                
                 for i in inventaire:
                     fields = i.get("fields", {})
                     if fields.get("Title") == reference and fields.get("Site") == site_stock:
@@ -440,6 +442,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                    
                     batiment = None 
                     emplacement = None 
+                    q_inv_bis = 0
+                    
                     for i in inventaire:
                         fields = i.get("fields", {})
                         if fields.get("Title") == reference and fields.get("Site") == site_stock_bis:
