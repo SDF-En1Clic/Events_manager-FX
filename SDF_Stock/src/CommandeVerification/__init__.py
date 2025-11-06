@@ -494,9 +494,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             else:
                 # Vérifie site principal
                 q_uko = sum(
-                    parse_float(i["fields"].get("Quantite"))
-                    for i in inventaire
-                    if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock
+                    parse_float(u["fields"].get("Quantite"))
+                    for u in ukobas
+                    if u["fields"].get("Title") == reference
                 )
                 
                 logging.info("   Produit éligible au contrôle de stock (Ukoba)")
