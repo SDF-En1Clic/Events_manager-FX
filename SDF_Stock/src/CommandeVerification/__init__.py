@@ -506,10 +506,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture Ukoba"})
                 ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
 
-        if not ruptures 
+        if not ruptures:
             statut_final = "OK"
         
-        else "Rupture"
+        else:
             statut_final = "Rupture"
             
         retour = {
