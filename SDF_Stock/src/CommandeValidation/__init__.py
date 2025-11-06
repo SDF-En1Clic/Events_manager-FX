@@ -205,6 +205,12 @@ def get_list_name(site_id, list_id, token):
 
 
 def get_graph_token(tenant_id, client_id, client_secret):
+    """
+    Obtient un token d'accès 'client_credentials' pour Microsoft Graph.
+    
+    Cette fonction inclut une gestion d'erreurs robuste pour s'assurer
+    qu'un token valide est retourné.
+    """
     url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     data = {
         "grant_type": "client_credentials",
@@ -212,11 +218,49 @@ def get_graph_token(tenant_id, client_id, client_secret):
         "client_secret": client_secret,
         "scope": "https://graph.microsoft.com/.default"
     }
-    response = requests.post(url, data=data)
-    logging.info(f"Get token Response : {response.content}")
-    return response.json().get("access_token")
+    
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
 
-app = func.FunctionApp()
+    try:
+        # Envoyer la requête POST pour obtenir le token
+        response = requests.post(url, data=data, headers=headers)
+        
+        # --- AJOUT DE LA GESTION D'ERREURS ---
+        
+        # Vérifier si la requête a échoué (status code 4xx ou 5xx)
+        if not response.ok:
+            logging.error(f"Échec de l'obtention du token. Status: {response.status_code}.")
+            # Logguer la réponse d'erreur de Microsoft pour le débogage
+            logging.error(f"Réponse d'erreur (Token): {response.text}")
+            # Lever une exception pour être attrapée par le bloc 'except'
+            response.raise_for_status() 
+
+        # Si la requête réussit (status 200 OK)
+        response_json = response.json()
+        access_token = response_json.get("access_token")
+
+        if not access_token:
+            # Cas rare où la réponse est 200 OK mais sans token
+            logging.error(f"Réponse OK (200) pour le token, mais 'access_token' est manquant. Réponse: {response_json}")
+            return None
+        
+        logging.info("Token d'accès Microsoft Graph obtenu avec succès.")
+        return access_token
+
+    except requests.exceptions.HTTPError as e:
+        # L'erreur a déjà été loggée ci-dessus
+        logging.error(f"Erreur HTTP lors de la demande de token: {e}")
+        return None
+    except requests.exceptions.RequestException as e:
+        # Pour les autres erreurs (ex: problème de connexion, DNS)
+        logging.error(f"Erreur de requête (connexion?) lors de la demande de token: {e}")
+        return None
+    except Exception as e:
+        # Pour les erreurs inattendues (ex: échec de .json() si la réponse n'est pas JSON)
+        logging.error(f"Erreur inattendue lors de la demande de token: {e}")
+        return None
 
 def parse_float(value):
     try:
