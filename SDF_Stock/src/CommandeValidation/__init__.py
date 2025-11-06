@@ -386,7 +386,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             item_id = detail["id"] 
             quantite = parse_float(d.get("Quantite"))
             statut = d.get("Statut")
-            # graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "OK"})
 
             produit = next((p["fields"] for p in produits if p["fields"].get("Title") == reference), None)
             if not produit:
@@ -415,13 +414,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
                 )
                 dispo = q_inv - q_resa
-                if dispo >= quantite:
-                    continue  # Produit validé dans site principal
                 logging.info("   Produit éligible au contrôle de stock (origine SDF)")
                 logging.info("   Site principal : %s", site_stock)
                 logging.info("   q_inv (stock) site principal : %s", q_inv)
                 logging.info("   q_resa (réservé) site principal : %s", q_resa)
                 logging.info("   dispo = q_inv - q_resa : %s", dispo)
+                
+                if dispo >= quantite:
+                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Reservé", "Site":site_stock, "Batiment":batiment, "Emplacement":emplacement})
+                    continue  # Produit validé dans site principal
+                
                 # Vérifie site secondaire
                 if site_stock_bis and site_stock_bis != "0":
                     q_inv_bis = sum(
@@ -442,7 +444,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     logging.info("   ➤ q_inv_bis (stock) : %s", q_inv_bis)
                     logging.info("   ➤ q_resa_bis (réservé) : %s", q_resa_bis)
                     logging.info("   ➤ dispo_bis = q_inv_bis - q_resa_bis : %s", dispo_bis)
+                    
                     if dispo_bis >= quantite:
+                        # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Reservé", "Site":site_stock_bis, "Batiment":batiment, "Emplacement":emplacement})
                         continue  # Produit validé dans site secondaire
 
                 # Vérifie arrivage
@@ -458,20 +462,32 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     for l in all_details
                     if l["fields"].get("Reference") == reference and l["fields"].get("Statut") == "Arrivage"
                 )
-                if (q_arriv - q_en_cours) >= quantite:
-                    continue  # Arrivage prévu avant la date
                 logging.info("   ➤ q_arriv (prévision livrée avant date) : %s", q_arriv)
                 logging.info("   ➤ q_en_cours (déjà réservée en 'Arrivage') : %s", q_en_cours)
                 logging.info("   ➤ arrivage dispo = q_arriv - q_en_cours : %s", q_arriv - q_en_cours)
+                
+                if (q_arriv - q_en_cours) >= quantite:
+                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
+                    continue  # Arrivage prévu avant la date
+                
                 # Sinon, rupture
+                # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture SdF"})
                 ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
 
             else:
                 logging.info("   ➤ Produit non SDF – pas de contrôle de stock (considéré disponible)")
+                # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Commandé"})
                 # Produit Ukoba : on considère "Commandé", jamais rupture
                 continue
 
-        statut_final = "Validé" if not ruptures else "Validé (Rupture SdF)"
+        if not ruptures 
+            statut_final = "OK" 
+            # graph_update_field(site_id, commandes_list_id, commande_id, token, {"Statut": "Validé"})
+        
+        else "Rupture"
+            statut_final = "Rupture" 
+            # graph_update_field(site_id, commandes_list_id, commande_id, token, {"Statut": "Validé (Rupture SdF)"})
+            
         retour = {
             "commande_id": commande_id,
             "statut": statut_final,
