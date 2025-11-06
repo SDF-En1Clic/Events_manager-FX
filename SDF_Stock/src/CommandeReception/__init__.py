@@ -404,11 +404,18 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if origine == "SDF":
                 if statut == "Rupture (SdF)":
                     # Vérifie site principal
-                    q_inv = sum(
-                        parse_float(i["fields"].get("Quantite"))
-                        for i in inventaire
-                        if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock
-                    )
+                    batiment = None 
+                    emplacement = None 
+                    q_inv = 0
+                    
+                    for i in inventaire:
+                        fields = i.get("fields", {})
+                        if fields.get("Title") == reference and fields.get("Site") == site_stock:
+                            q_inv += parse_float(fields.get("Quantite"))
+                            if batiment is None:
+                                batiment = fields.get("Batiment")
+                                emplacement = fields.get("Emplacement")
+                                
                     q_resa = sum(
                         parse_float(l["fields"].get("Quantite"))
                         for l in all_details
@@ -426,16 +433,23 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     
                     dispo = q_inv - q_resa
                     if dispo >= quantite:
-                        # graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site_prepa":site_recept, "Batiment_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
+                        graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site_prepa":site_recept, "Batiment_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
                         continue  # Produit validé dans site principal
                     
                     # Vérifie site secondaire
                     if site_stock_bis and site_stock_bis != "0":
-                        q_inv_bis = sum(
-                            parse_float(i["fields"].get("Quantite"))
-                            for i in inventaire
-                            if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock_bis
-                        )
+                        batiment = None 
+                        emplacement = None 
+                        q_inv_bis = 0
+                        
+                        for i in inventaire:
+                            fields = i.get("fields", {})
+                            if fields.get("Title") == reference and fields.get("Site") == site_stock_bis:
+                                q_inv_bis += parse_float(fields.get("Quantite"))
+                                if batiment is None:
+                                    batiment = fields.get("Batiment")
+                                    emplacement = fields.get("Emplacement")
+                                    
                         q_resa_bis = sum(
                             parse_float(l["fields"].get("Quantite"))
                             for l in all_details
@@ -452,18 +466,18 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         
                         dispo_bis = q_inv_bis - q_resa_bis
                         if dispo_bis >= quantite:
-                            # graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site_prepa":site_recept, "Batiment_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
+                            graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site_prepa":site_recept, "Batiment_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
                             continue  # Produit validé dans site secondaire
 
                     ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
                 else:
-                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site_prepa":site_recept, "Batiment_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
+                    graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site_prepa":site_recept, "Batiment_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
 
             else:
                 logging.info("   ➤ Produit non SDF – pas de contrôle de stock (considéré disponible)")
-                # graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site":site_recept, "Batiment":batiment_recept, "Emplacement":emplacement_recept,"Site_prepa":site_recept, "Batiment_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
+                graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site":site_recept, "Batiment":batiment_recept, "Emplacement":emplacement_recept,"Site_prepa":site_recept, "Batiment_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
 
-        # graph_update_field(site_id, commandes_list_id, commande_id, token, {"Statut": "Réceptionné"})
+        graph_update_field(site_id, commandes_list_id, commande_id, token, {"Statut": "Réceptionné"})
         statut_final = "Validé" if not ruptures else "Validé (Rupture SdF)"
         retour = {
             "commande_id": commande_id,
