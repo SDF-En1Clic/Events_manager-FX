@@ -323,7 +323,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         # --- MODIFICATION: Utilisation de la nouvelle fonction Get Item by ID ---
         try:
-            commande_item = graph_get_item_by_id(site_id, commandes_list_id, token, commande_id)
+            commande_item = graph_get_item_by_id(site_id, commandes_list_id, commande_id, token)
             
             if not commande_item:
                 logging.warning(f"Commande {commande_id} introuvable (ou erreur 404).")
