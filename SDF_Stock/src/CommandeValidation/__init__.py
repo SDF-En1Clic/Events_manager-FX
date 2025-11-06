@@ -382,7 +382,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         ruptures = []
         for detail in details:
             d = detail["fields"]
-            reference = d.get("Title")
+            reference = d.get("Reference")
             item_id = detail["id"] 
             quantite = parse_float(d.get("Quantite"))
             statut = d.get("Statut")
@@ -409,7 +409,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 q_resa = sum(
                     parse_float(l["fields"].get("Quantite"))
                     for l in all_details
-                    if l["fields"].get("Title") == reference
+                    if l["fields"].get("Reference") == reference
                     and l["fields"].get("Statut") in ["Reservé", "Préparé", "Sortie produits"]
                     and (l["fields"].get("Site") == site_stock)
                     and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
@@ -432,7 +432,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     q_resa_bis = sum(
                         parse_float(l["fields"].get("Quantite"))
                         for l in all_details
-                        if l["fields"].get("Title") == reference
+                        if l["fields"].get("Reference") == reference
                         and l["fields"].get("Statut") in ["Reservé", "Préparé", "Sortie produits"]
                         and (l["fields"].get("Site") == site_stock_bis)
                         and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
@@ -456,7 +456,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 q_en_cours = sum(
                     parse_float(l["fields"].get("Quantite"))
                     for l in all_details
-                    if l["fields"].get("Title") == reference and l["fields"].get("Statut") == "Arrivage"
+                    if l["fields"].get("Reference") == reference and l["fields"].get("Statut") == "Arrivage"
                 )
                 if (q_arriv - q_en_cours) >= quantite:
                     continue  # Arrivage prévu avant la date
