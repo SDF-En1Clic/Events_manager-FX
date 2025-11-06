@@ -278,6 +278,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         emplacement_recept = body.get("emplacement")
                 # --- LOG AJOUTÉ ---
         logging.info(f"Paramètre 'commande_id' reçu : {commande_id}")
+        logging.info(f"Paramètre 'site' reçu : {site_recept}")
+        logging.info(f"Paramètre 'batiment' reçu : {batiment_recept}")
+        logging.info(f"Paramètre 'emplacement' reçu : {emplacement_recept}")
         if not commande_id:
             return func.HttpResponse("Paramètre 'commande_id' requis", status_code=400)
 
