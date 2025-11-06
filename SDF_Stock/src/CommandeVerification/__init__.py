@@ -421,7 +421,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info("   dispo = q_inv - q_resa : %s", dispo)
                 
                 if dispo >= quantite:
-                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible", "Site":site_stock, "Batiment":batiment, "Emplacement":emplacement})
+                    graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible", "Site":site_stock, "Batiment":batiment, "Emplacement":emplacement})
                     continue  # Produit validé dans site principal
                 
                 # Vérifie site secondaire
@@ -446,7 +446,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     logging.info("   ➤ dispo_bis = q_inv_bis - q_resa_bis : %s", dispo_bis)
                     
                     if dispo_bis >= quantite:
-                        # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible", "Site":site_stock_bis, "Batiment":batiment, "Emplacement":emplacement})
+                        graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible", "Site":site_stock_bis, "Batiment":batiment, "Emplacement":emplacement})
                         continue  # Produit validé dans site secondaire
 
                 # Vérifie arrivage
@@ -467,11 +467,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info("   ➤ arrivage dispo = q_arriv - q_en_cours : %s", q_arriv - q_en_cours)
                 
                 if (q_arriv - q_en_cours) >= quantite:
-                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
+                    graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
                     continue  # Arrivage prévu avant la date
                 
                 # Sinon, rupture
-                # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture SdF"})
+                graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture SdF"})
                 ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
 
             else:
@@ -486,7 +486,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info("   q_uko (stock) ukoba : %s", q_uko)
                 
                 if q_uko >= quantite:
-                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible"})
+                    graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible"})
                     continue  # Produit validé dans site principal
                     
                 q_arriv = sum(
@@ -499,11 +499,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info("   ➤ q_arriv (prévision livrée avant date) : %s", q_arriv)
                 
                 if q_arriv >= quantite:
-                    # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
+                    graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
                     continue  # Arrivage prévu avant la date
                 
                 # Sinon, rupture
-                # graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture Ukoba"})
+                graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture Ukoba"})
                 ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
 
         if not ruptures 
