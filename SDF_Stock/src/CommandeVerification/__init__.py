@@ -271,28 +271,102 @@ def parse_float(value):
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
-        # ... [Tout votre code d'initialisation reste identique jusqu'à la récupération des données] ...
+        body = req.get_json()
+        commande_id = body.get("commande_id")
+        logging.info(f"Paramètre 'commande_id' reçu : {commande_id}")
+        if not commande_id:
+            return func.HttpResponse("Paramètre 'commande_id' requis", status_code=400)
+
+        # --- Secrets
+        tenant_id = get_secret("tenantid")
+        client_id = get_secret("clientid")
+        client_secret = get_secret("appsecret")
+        site_id = get_secret("siteid")
+        commandes_list_id = get_secret("cmdlistid")
+        details_list_id = get_secret("cmddetailslistid")
+        produits_list_id = get_secret("produitslistid")
+        inventaire_list_id = get_secret("inventairelistid")
+        arrivages_list_id = get_secret("arrivagesproduitslistid")
+        ukoba_list_id = get_secret("ukobalistid")
+
+        # --- Auth
+        logging.info("Récupération du token Graph...")
+        token = get_graph_token(tenant_id, client_id, client_secret)
+        if not token:
+            logging.error("Échec de l'obtention du token Graph.")
+            return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
+        logging.info("Token Graph obtenu.")
+
+        # --- Vérification Site/Liste (Optionnel, gardé pour compatibilité)
+        get_site_name(site_id, token)
+        get_list_name(site_id, commandes_list_id, token)
+
+        logging.info(f"Récupération de la commande ID: {commande_id}")
+
+        # --- Récupération Commande
+        try:
+            commande_item = graph_get_item_by_id(site_id, commandes_list_id, commande_id, token)
+            if not commande_item:
+                return func.HttpResponse("Commande introuvable", status_code=404)
+            
+            commande = commande_item.get("fields") 
+            if not commande:
+                 return func.HttpResponse("Erreur de format de commande", status_code=500)
+            logging.info(f"Commande {commande_id} trouvée.")
+
+        except Exception as e:
+            logging.error(f"Erreur commande: {e}")
+            return func.HttpResponse("Erreur récupération commande", status_code=500)
+
+        site_stock = commande.get("Site_Stock")
+        site_stock_bis = commande.get("Site_Stock_second")
+        date_livraison = commande.get("Date_livraison")
+        if date_livraison:
+            try:
+                date_livraison = datetime.strptime(date_livraison[:10], "%Y-%m-%d")
+            except:
+                date_livraison = None
+
+        # ==============================================================================
+        # ### LIGNE RAJOUTÉE ICI (C'était l'erreur NameError) ###
+        # On doit récupérer les détails AVANT de pouvoir compter les lignes ou extraire les références
+        # ==============================================================================
+        logging.info("Récupération des lignes de la commande (details)...")
+        details = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq {commande_id}")
         
-        # On suppose que les données (details, produits, inventaire, etc.) sont chargées ici
-        # comme dans votre code précédent.
-
-        # ... [Récupération details, produits, inventaire, arrivages, ukobas] ...
-
-        # --- INITIALISATION DU TRACKER (NOUVEAU) ---
-        # Ce dictionnaire va retenir la quantité utilisée par référence ET par source (Site Principal, Secondaire, Arrivage)
-        # Clé : "Reference_TypeSource", Valeur : Quantité accumulée
-        usage_tracker = {} 
-        # -------------------------------------------
-
-        ruptures = []
         nb_lignes_commande = len(details)
+        logging.info(f"Nombre de lignes dans la commande : {nb_lignes_commande}")
 
+        # --- Chargement des données globales
+        logging.info("Chargement des stocks et références...")
+        produits = graph_list_items(site_id, produits_list_id, token)
+        inventaire = graph_list_items(site_id, inventaire_list_id, token)
+        arrivages = graph_list_items(site_id, arrivages_list_id, token)
+        ukobas = graph_list_items(site_id, ukoba_list_id, token)
+
+        # --- Préparation de l'historique (Optimisation)
+        references_utiles = list(set(d["fields"].get("Title") for d in details if "fields" in d and d["fields"].get("Title")))
+        filter_clauses = split_filter_queries("fields/Title", references_utiles, chunk_size=20)
+
+        all_details = []
+        logging.info("Récupération de l'historique des commandes (pour calcul réservations)...")
+        for clause in filter_clauses:
+            all_details.extend(
+                graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
+            )
+        logging.info(f"Historique chargé : {len(all_details)} lignes.")
+
+        # --- INITIALISATION DU TRACKER (Stock Virtuel) ---
+        usage_tracker = {} 
+        ruptures = []
+        
+        # --- BOUCLE DE TRAITEMENT ---
         for detail in details:
             d = detail["fields"]
             reference = d.get("Reference")
             item_id = detail["id"] 
             quantite = parse_float(d.get("Quantite"))
-            statut = d.get("Statut") # On pourrait vouloir ignorer les lignes déjà traitées si besoin
+            statut = d.get("Statut")
 
             produit = next((p["fields"] for p in produits if p["fields"].get("Title") == reference), None)
             if not produit:
@@ -301,7 +375,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             origine = produit.get("Origine", "")
             
-            # --- LOGIQUE SDF ---
+            # LOGIQUE SDF
             if origine == "SDF":
 
                 # 1. Vérifie site principal
@@ -311,14 +385,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock
                 )
 
-                # Récup info batiment/emplacement (inchangé)
                 batiment = None 
-                emplacement = None
+                emplacement = None 
+                
+                # Récup info batiment/emplacement
                 for i in inventaire:
-                    if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock:
-                        batiment = i["fields"].get("Batiment")
-                        emplacement = i["fields"].get("Emplacement")
-                        break # Optimisation : on prend le premier trouvé
+                    fields = i.get("fields", {})
+                    if fields.get("Title") == reference and fields.get("Site") == site_stock:
+                        batiment = fields.get("Batiment")
+                        emplacement = fields.get("Emplacement")
+                        break
                 
                 q_resa = sum(
                     parse_float(l["fields"].get("Quantite"))
@@ -329,17 +405,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
                 )
 
-                # --- MODIFICATION ICI : Prise en compte de la consommation locale ---
+                # --- TRACKER LOCAL ---
                 key_main = f"{reference}_main_{site_stock}"
                 deja_pris_ce_tour = usage_tracker.get(key_main, 0)
                 
-                dispo = q_inv - q_resa - deja_pris_ce_tour  # On soustrait ce qu'on a pris aux tours précédents
+                dispo = q_inv - q_resa - deja_pris_ce_tour
                 
-                logging.info(f"Ref: {reference} | Stock: {q_inv} | Resa: {q_resa} | Déjà Pris (Lignes préc.): {deja_pris_ce_tour} | Dispo Réelle: {dispo}")
+                logging.info(f"Ref: {reference} | Stock: {q_inv} | Resa: {q_resa} | Déjà Pris (Local): {deja_pris_ce_tour} | Dispo: {dispo}")
 
                 if dispo >= quantite:
                     graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible", "Site":site_stock, "Batiment":batiment, "Emplacement":emplacement})
-                    # On met à jour le tracker pour la prochaine ligne qui demanderait la même référence
                     usage_tracker[key_main] = deja_pris_ce_tour + quantite
                     continue 
                 
@@ -354,11 +429,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     batiment_bis = None
                     emplacement_bis = None
                     for i in inventaire:
-                        if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock_bis:
-                            batiment_bis = i["fields"].get("Batiment")
-                            emplacement_bis = i["fields"].get("Emplacement")
+                        fields = i.get("fields", {})
+                        if fields.get("Title") == reference and fields.get("Site") == site_stock_bis:
+                            batiment_bis = fields.get("Batiment")
+                            emplacement_bis = fields.get("Emplacement")
                             break
-
+                    
                     q_resa_bis = sum(
                         parse_float(l["fields"].get("Quantite"))
                         for l in all_details
@@ -368,7 +444,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
                     )
 
-                    # --- MODIFICATION ICI : Tracker Secondaire ---
                     key_sec = f"{reference}_sec_{site_stock_bis}"
                     deja_pris_sec = usage_tracker.get(key_sec, 0)
 
@@ -391,8 +466,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     for l in all_details
                     if l["fields"].get("Reference") == reference and l["fields"].get("Statut") == "Arrivage"
                 )
-
-                # --- MODIFICATION ICI : Tracker Arrivage ---
+                
                 key_arriv = f"{reference}_arrivage"
                 deja_pris_arriv = usage_tracker.get(key_arriv, 0)
 
@@ -403,11 +477,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     usage_tracker[key_arriv] = deja_pris_arriv + quantite
                     continue 
                 
-                # Sinon, rupture
                 graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture SdF"})
                 ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
 
-            # --- LOGIQUE UKOBA ---
+            # LOGIQUE UKOBA
             else:
                 q_uko = sum(
                     parse_float(u["fields"].get("Quantite"))
@@ -415,7 +488,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     if u["fields"].get("Title") == reference
                 )
                 
-                # --- MODIFICATION ICI : Tracker Ukoba ---
                 key_uko = f"{reference}_ukoba"
                 deja_pris_uko = usage_tracker.get(key_uko, 0)
 
@@ -426,20 +498,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     usage_tracker[key_uko] = deja_pris_uko + quantite
                     continue 
                     
-                # Vérif Arrivage Ukoba (Même logique que SDF)
                 q_arriv = sum(
                     parse_float(a["fields"].get("Quantite"))
                     for a in arrivages
                     if a["fields"].get("Title") == reference and date_livraison and a["fields"].get("Date")
                     and datetime.strptime(a["fields"]["Date"][:10], "%Y-%m-%d") < date_livraison
                 )
-
-                key_arriv = f"{reference}_arrivage" # On partage le tracker arrivage avec SDF ou spécifique, selon votre besoin. Ici partagé.
+                
+                # Note: On réutilise la clé arrivage générale ou spécifique selon besoin.
+                # Ici on prend la même que SDF pour simplifier
+                key_arriv = f"{reference}_arrivage"
                 deja_pris_arriv = usage_tracker.get(key_arriv, 0)
-
-                # Note: Pour Ukoba, vous ne comptiez pas 'q_en_cours' dans votre code initial ? 
-                # J'ajoute la logique standard ici pour cohérence :
-                # dispo_arriv = q_arriv - deja_pris_arriv
                 
                 if (q_arriv - deja_pris_arriv) >= quantite:
                     graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
@@ -449,7 +518,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture Ukoba"})
                 ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
 
-        # ... [Fin de la fonction (retour JSON)] ...
         if not ruptures:
             statut_final = "OK"
         else:
@@ -462,7 +530,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "nb_produits_commande": nb_lignes_commande
         }
 
-        return func.HttpResponse(json.dumps(retour), status_code=200, mimetype="application/json")
+        return func.HttpResponse(
+            json.dumps(retour),
+            status_code=200,
+            mimetype="application/json"
+        )
 
     except Exception as e:
         logging.exception("Erreur dans la fonction Azure")
