@@ -7,70 +7,68 @@ import urllib.parse
 import json
 from datetime import datetime
 
-# --------- CONFIG -------------
-VAULT_URL = "https://events-manager-kv.vault.azure.net/"  
-# -----------------------------
+# --------- CONFIG GLOBALE -------------
+VAULT_URL = "https://events-manager-kv.vault.azure.net/"
+# --------------------------------------
+
+# --- OPTIMISATION CRITIQUE : SESSION PERSISTANTE ---
+# Cela permet de réutiliser la connexion TCP/SSL pour toutes les requêtes
+# et évite l'erreur "Temporary failure in name resolution"
+session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+session.mount('https://', adapter)
+# ---------------------------------------------------
 
 def get_secret(name: str):
     credential = DefaultAzureCredential()
     client = SecretClient(vault_url=VAULT_URL, credential=credential)
     return client.get_secret(name).value
 
-def graph_get_all(site_id, list_id, token, filter_expr=None):
-    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items?$expand=fields"
-    if filter_expr:
-        url += f"&{filter_expr}"
-    
-    results = []
-    while url:
-        res = requests.get(url)
-        res.raise_for_status()
-        data = res.json()
-        results.extend(data.get("value", []))
-        url = data.get("@odata.nextLink")
+def get_graph_token(tenant_id, client_id, client_secret):
+    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": "https://graph.microsoft.com/.default"
+    }
+    headers = { "Content-Type": "application/x-www-form-urlencoded" }
 
-    return results
-def split_filter_queries(field_name, values, chunk_size=20):
-    """
-    Génère des filtres $filter par groupes (chunk_size) de valeurs.
-    """
-    filters = []
-    for i in range(0, len(values), chunk_size):
-        chunk = values[i:i + chunk_size]
-        clause = " or ".join([f"{field_name} eq '{v}'" for v in chunk])
-        filters.append(clause)
-    return filters
+    try:
+        # Utilisation de session
+        response = session.post(url, data=data, headers=headers)
+        
+        if not response.ok:
+            logging.error(f"Échec Token. Status: {response.status_code}. Resp: {response.text}")
+            response.raise_for_status()
+
+        access_token = response.json().get("access_token")
+        if not access_token:
+            return None
+        return access_token
+
+    except Exception as e:
+        logging.error(f"Erreur token: {e}")
+        return None
 
 def graph_list_items(site_id, list_id, token, filter_expr=None):
     headers = {
         "Authorization": f"Bearer {token}",
         "Prefer": "HonorNonIndexedQueriesWarningMayFailRandomly"
     }
-
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items?$expand=fields"
     if filter_expr:
         url += f"&{filter_expr}"
 
     results = []
     while url:
-        res = requests.get(url, headers=headers)
+        # Utilisation de session
+        res = session.get(url, headers=headers)
         res.raise_for_status()
         data = res.json()
         results.extend(data.get("value", []))
         url = data.get("@odata.nextLink")
-
     return results
-
-def graph_update_field(site_id, list_id, item_id, token, updates: dict):
-    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/fields"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    res = requests.patch(url, headers=headers, data=json.dumps(updates))
-    res.raise_for_status()
-
-
 
 def graph_filtered_items(site_id, list_id, token, filter_expr=None):
     base_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items?$expand=fields"
@@ -80,25 +78,17 @@ def graph_filtered_items(site_id, list_id, token, filter_expr=None):
     }
 
     if filter_expr:
-        # S'assurer que le filtre est encodé proprement 
-        filter_param = urllib.parse.quote(filter_expr, safe="=()/ ")  # ne pas échapper les () ni eq, ni espaces
+        filter_param = urllib.parse.quote(filter_expr, safe="=()/ ")
         base_url += f"&$filter={filter_param}"
 
     results = []
     url = base_url
-
-    # --- AJOUT DE LOG (MODIFIÉ) ---
-    logging.info(f"Appel Graph API (filtré): {url}")
-    # --- FIN AJOUT ---
-
+    
     while url:
-        res = requests.get(url, headers=headers)
-        
-        # --- AJOUT DE LOG D'ERREUR ---
+        # Utilisation de session
+        res = session.get(url, headers=headers)
         if not res.ok: 
              logging.error(f"Erreur API Graph (filtré). Status: {res.status_code}. Réponse: {res.text}")
-        # --- FIN AJOUT ---
-
         res.raise_for_status()
         data = res.json()
         results.extend(data.get("value", []))
@@ -106,169 +96,79 @@ def graph_filtered_items(site_id, list_id, token, filter_expr=None):
 
     return results
 
-# --- NOUVELLE FONCTION AJOUTÉE ---
 def graph_get_item_by_id(site_id, list_id, item_id, token):
-    """
-    Récupère un seul élément de liste par son ID SharePoint natif.
-    C'est plus efficace qu'un filtre.
-    """
-    base_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}?$expand=fields"
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
-
-    logging.info(f"Appel Graph API (Get Item by ID): {base_url}")
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}?$expand=fields"
+    headers = { "Authorization": f"Bearer {token}" }
 
     try:
-        res = requests.get(base_url, headers=headers)
-        
+        # Utilisation de session
+        res = session.get(url, headers=headers)
         if not res.ok:
-            logging.error(f"Erreur API Graph (Get Item by ID). Status: {res.status_code}. Réponse: {res.text}")
-        
+            logging.error(f"Erreur Get Item {item_id}. Status: {res.status_code}")
         res.raise_for_status()
-        
-        return res.json()  # Renvoie l'objet item complet
-
+        return res.json()
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            logging.warning(f"Élément introuvable (404) à l'URL : {base_url}")
-        else:
-            logging.error(f"Erreur HTTP inattendue (Get Item by ID): {e}")
-        return None # Renvoie None en cas d'erreur HTTP (ex: 404 Not Found)
-    except Exception as e:
-        logging.error(f"Erreur non-HTTP (Get Item by ID): {e}")
+            logging.warning(f"Item {item_id} introuvable (404).")
         return None
-# --- FIN DE LA NOUVELLE FONCTION ---
+    except Exception as e:
+        logging.error(f"Erreur Get Item: {e}")
+        return None
 
-# --- NOUVELLE FONCTION AJOUTÉE (version avec logging) ---
+def graph_update_field(site_id, list_id, item_id, token, updates: dict):
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/fields"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    # Utilisation de session (ESSENTIEL pour éviter l'erreur DNS en boucle)
+    res = session.patch(url, headers=headers, data=json.dumps(updates))
+    
+    if not res.ok:
+        logging.error(f"Erreur Update Item {item_id}. Status: {res.status_code}. Resp: {res.text}")
+    
+    res.raise_for_status()
+
 def get_site_name(site_id, token):
-    """
-    Récupère le nom d'affichage d'un site SharePoint à partir de son ID via l'API Graph.
-    Utilise logging pour les erreurs.
-    """
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
+    headers = { "Authorization": f"Bearer {token}" }
     try:
-        res = requests.get(url, headers=headers)
-        res.raise_for_status()  # Lève une exception en cas d'erreur HTTP (4xx ou 5xx)
-        
-        data = res.json()
-        
-        # Le nom du site est généralement dans 'displayName' ou 'name'
-        site_name = data.get('displayName') or data.get('name')
-        
-        if not site_name:
-            logging.warning(f"Avertissement: L'ID du site {site_id} est valide, mais n'a pas retourné de nom.")
-            
-        return site_name
-
-    except requests.exceptions.HTTPError as http_err:
-        logging.error(f"Erreur HTTP lors de la récupération du nom du site: {http_err}")
-        logging.error(f"Réponse: {res.text}")
-        if res.status_code == 404:
-            logging.error(f"Erreur: Le site avec l'ID '{site_id}' n'a pas été trouvé.")
-        elif res.status_code == 401:
-            logging.error("Erreur: Le token est invalide ou a expiré.")
-    except Exception as err:
-        logging.error(f"Une autre erreur est survenue lors de la récupération du nom du site: {err}")
-        
-    return None
-# --- FIN DE LA FONCTION AJOUTÉE ---
-
-# --- NOUVELLE FONCTION POUR VÉRIFIER LE NOM DE LA LISTE ---
-def get_list_name(site_id, list_id, token):
-    """
-    Récupère le nom d'affichage d'une liste SharePoint à partir de son ID.
-    """
-    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
-    try:
-        res = requests.get(url, headers=headers)
+        res = session.get(url, headers=headers)
         res.raise_for_status()
         data = res.json()
-        list_name = data.get('displayName') or data.get('name')
-        return list_name
-    except requests.exceptions.HTTPError as http_err:
-        logging.error(f"Erreur HTTP lors de la récupération du nom de la liste {list_id}: {http_err}")
-    except Exception as err:
-        logging.error(f"Erreur lors de la récupération du nom de la liste {list_id}: {err}")
-    return None
-# --- FIN DE LA FONCTION AJOUTÉE ---
-
-
-def get_graph_token(tenant_id, client_id, client_secret):
-    """
-    Obtient un token d'accès 'client_credentials' pour Microsoft Graph.
-    
-    Cette fonction inclut une gestion d'erreurs robuste pour s'assurer
-    qu'un token valide est retourné.
-    """
-    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-    data = {
-        "grant_type": "client_credentials",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "scope": "https://graph.microsoft.com/.default"
-    }
-    
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-
-    try:
-        # Envoyer la requête POST pour obtenir le token
-        response = requests.post(url, data=data, headers=headers)
-        
-        # --- AJOUT DE LA GESTION D'ERREURS ---
-        
-        # Vérifier si la requête a échoué (status code 4xx ou 5xx)
-        if not response.ok:
-            logging.error(f"Échec de l'obtention du token. Status: {response.status_code}.")
-            # Logguer la réponse d'erreur de Microsoft pour le débogage
-            logging.error(f"Réponse d'erreur (Token): {response.text}")
-            # Lever une exception pour être attrapée par le bloc 'except'
-            response.raise_for_status() 
-
-        # Si la requête réussit (status 200 OK)
-        response_json = response.json()
-        access_token = response_json.get("access_token")
-
-        if not access_token:
-            # Cas rare où la réponse est 200 OK mais sans token
-            logging.error(f"Réponse OK (200) pour le token, mais 'access_token' est manquant. Réponse: {response_json}")
-            return None
-        
-        logging.info("Token d'accès Microsoft Graph obtenu avec succès.")
-        return access_token
-
-    except requests.exceptions.HTTPError as e:
-        # L'erreur a déjà été loggée ci-dessus
-        logging.error(f"Erreur HTTP lors de la demande de token: {e}")
-        return None
-    except requests.exceptions.RequestException as e:
-        # Pour les autres erreurs (ex: problème de connexion, DNS)
-        logging.error(f"Erreur de requête (connexion?) lors de la demande de token: {e}")
-        return None
+        return data.get('displayName') or data.get('name')
     except Exception as e:
-        # Pour les erreurs inattendues (ex: échec de .json() si la réponse n'est pas JSON)
-        logging.error(f"Erreur inattendue lors de la demande de token: {e}")
+        logging.warning(f"Erreur nom site: {e}")
+    return None
+
+def get_list_name(site_id, list_id, token):
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}"
+    headers = { "Authorization": f"Bearer {token}" }
+    try:
+        res = session.get(url, headers=headers)
+        res.raise_for_status()
+        data = res.json()
+        return data.get('displayName') or data.get('name')
+    except Exception:
         return None
+
+def split_filter_queries(field_name, values, chunk_size=20):
+    filters = []
+    for i in range(0, len(values), chunk_size):
+        chunk = values[i:i + chunk_size]
+        clause = " or ".join([f"{field_name} eq '{v}'" for v in chunk])
+        filters.append(clause)
+    return filters
 
 def parse_float(value):
     try:
         return float(value)
     except:
-        return 0
+        return 0.0
 
-
+# ==============================================================================
+# FONCTION PRINCIPALE
+# ==============================================================================
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
@@ -290,34 +190,21 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         ukoba_list_id = get_secret("ukobalistid")
 
         # --- Auth
-        logging.info("Récupération du token Graph...")
         token = get_graph_token(tenant_id, client_id, client_secret)
         if not token:
-            logging.error("Échec de l'obtention du token Graph.")
             return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
-        logging.info("Token Graph obtenu.")
 
-        # --- Vérification Site/Liste (Optionnel, gardé pour compatibilité)
-        get_site_name(site_id, token)
-        get_list_name(site_id, commandes_list_id, token)
+        # --- Vérifs (Juste pour les logs)
+        nom_site = get_site_name(site_id, token)
+        logging.info(f"Site : {nom_site}")
 
-        logging.info(f"Récupération de la commande ID: {commande_id}")
-
-        # --- Récupération Commande
-        try:
-            commande_item = graph_get_item_by_id(site_id, commandes_list_id, commande_id, token)
-            if not commande_item:
-                return func.HttpResponse("Commande introuvable", status_code=404)
-            
-            commande = commande_item.get("fields") 
-            if not commande:
-                 return func.HttpResponse("Erreur de format de commande", status_code=500)
-            logging.info(f"Commande {commande_id} trouvée.")
-
-        except Exception as e:
-            logging.error(f"Erreur commande: {e}")
-            return func.HttpResponse("Erreur récupération commande", status_code=500)
-
+        # --- Récupération de la commande
+        commande_item = graph_get_item_by_id(site_id, commandes_list_id, commande_id, token)
+        if not commande_item:
+            return func.HttpResponse("Commande introuvable", status_code=404)
+        
+        commande = commande_item.get("fields", {})
+        
         site_stock = commande.get("Site_Stock")
         site_stock_bis = commande.get("Site_Stock_second")
         date_livraison = commande.get("Date_livraison")
@@ -327,47 +214,42 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             except:
                 date_livraison = None
 
-        # ==============================================================================
-        # ### LIGNE RAJOUTÉE ICI (C'était l'erreur NameError) ###
-        # On doit récupérer les détails AVANT de pouvoir compter les lignes ou extraire les références
-        # ==============================================================================
-        logging.info("Récupération des lignes de la commande (details)...")
+        # --- Récupération des détails (Lignes de commande)
+        logging.info("Récupération des détails de la commande...")
         details = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq {commande_id}")
-        
         nb_lignes_commande = len(details)
-        logging.info(f"Nombre de lignes dans la commande : {nb_lignes_commande}")
+        logging.info(f"Nombre de lignes à traiter : {nb_lignes_commande}")
 
         # --- Chargement des données globales
-        logging.info("Chargement des stocks et références...")
+        logging.info("Chargement global (Produits, Inventaire, Arrivages)...")
         produits = graph_list_items(site_id, produits_list_id, token)
         inventaire = graph_list_items(site_id, inventaire_list_id, token)
         arrivages = graph_list_items(site_id, arrivages_list_id, token)
         ukobas = graph_list_items(site_id, ukoba_list_id, token)
 
-        # --- Préparation de l'historique (Optimisation)
+        # --- Chargement Historique (Batch)
         references_utiles = list(set(d["fields"].get("Title") for d in details if "fields" in d and d["fields"].get("Title")))
         filter_clauses = split_filter_queries("fields/Title", references_utiles, chunk_size=20)
-
-        all_details = []
-        logging.info("Récupération de l'historique des commandes (pour calcul réservations)...")
+        
+        all_details_history = []
+        logging.info("Chargement historique des réservations...")
         for clause in filter_clauses:
-            all_details.extend(
+            all_details_history.extend(
                 graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
             )
-        logging.info(f"Historique chargé : {len(all_details)} lignes.")
+        logging.info(f"Historique chargé : {len(all_details_history)} lignes.")
 
-        # --- INITIALISATION DU TRACKER (Stock Virtuel) ---
-        usage_tracker = {} 
+        # --- TRACKER DE STOCK VIRTUEL ---
+        usage_tracker = {}
         ruptures = []
-        
+
         # --- BOUCLE DE TRAITEMENT ---
         for detail in details:
             d = detail["fields"]
             reference = d.get("Reference")
             item_id = detail["id"] 
             quantite = parse_float(d.get("Quantite"))
-            statut = d.get("Statut")
-
+            
             produit = next((p["fields"] for p in produits if p["fields"].get("Title") == reference), None)
             if not produit:
                 ruptures.append({"reference": reference, "raison": "produit introuvable"})
@@ -375,69 +257,63 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             origine = produit.get("Origine", "")
             
-            # LOGIQUE SDF
+            # -----------------------------------------------------------
+            # LOGIQUE ORIGINE : SDF
+            # -----------------------------------------------------------
             if origine == "SDF":
-
-                # 1. Vérifie site principal
+                
+                # --- SITE PRINCIPAL ---
                 q_inv = sum(
-                    parse_float(i["fields"].get("Quantite"))
-                    for i in inventaire
+                    parse_float(i["fields"].get("Quantite")) for i in inventaire
                     if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock
                 )
-
-                batiment = None 
-                emplacement = None 
                 
-                # Récup info batiment/emplacement
+                # Récup batiment/emplacement
+                batiment = None
+                emplacement = None
                 for i in inventaire:
-                    fields = i.get("fields", {})
-                    if fields.get("Title") == reference and fields.get("Site") == site_stock:
-                        batiment = fields.get("Batiment")
-                        emplacement = fields.get("Emplacement")
+                    f = i.get("fields", {})
+                    if f.get("Title") == reference and f.get("Site") == site_stock:
+                        batiment = f.get("Batiment")
+                        emplacement = f.get("Emplacement")
                         break
                 
                 q_resa = sum(
-                    parse_float(l["fields"].get("Quantite"))
-                    for l in all_details
+                    parse_float(l["fields"].get("Quantite")) for l in all_details_history
                     if l["fields"].get("Reference") == reference
                     and l["fields"].get("Statut") in ["Reservé", "Préparé", "Sortie produits"]
                     and (l["fields"].get("Site") == site_stock)
                     and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
                 )
 
-                # --- TRACKER LOCAL ---
+                # Tracker Local
                 key_main = f"{reference}_main_{site_stock}"
-                deja_pris_ce_tour = usage_tracker.get(key_main, 0)
-                
-                dispo = q_inv - q_resa - deja_pris_ce_tour
-                
-                logging.info(f"Ref: {reference} | Stock: {q_inv} | Resa: {q_resa} | Déjà Pris (Local): {deja_pris_ce_tour} | Dispo: {dispo}")
+                deja_pris = usage_tracker.get(key_main, 0.0)
+                dispo = q_inv - q_resa - deja_pris
 
                 if dispo >= quantite:
-                    graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible", "Site":site_stock, "Batiment":batiment, "Emplacement":emplacement})
-                    usage_tracker[key_main] = deja_pris_ce_tour + quantite
-                    continue 
-                
-                # 2. Vérifie site secondaire
+                    graph_update_field(site_id, details_list_id, item_id, token, 
+                        {"Statut": "Disponible", "Site": site_stock, "Batiment": batiment, "Emplacement": emplacement})
+                    usage_tracker[key_main] = deja_pris + quantite
+                    continue
+
+                # --- SITE SECONDAIRE ---
                 if site_stock_bis and site_stock_bis != "0":
                     q_inv_bis = sum(
-                        parse_float(i["fields"].get("Quantite"))
-                        for i in inventaire
+                        parse_float(i["fields"].get("Quantite")) for i in inventaire
                         if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock_bis
                     )
-                    
                     batiment_bis = None
                     emplacement_bis = None
                     for i in inventaire:
-                        fields = i.get("fields", {})
-                        if fields.get("Title") == reference and fields.get("Site") == site_stock_bis:
-                            batiment_bis = fields.get("Batiment")
-                            emplacement_bis = fields.get("Emplacement")
+                        f = i.get("fields", {})
+                        if f.get("Title") == reference and f.get("Site") == site_stock_bis:
+                            batiment_bis = f.get("Batiment")
+                            emplacement_bis = f.get("Emplacement")
                             break
-                    
+
                     q_resa_bis = sum(
-                        parse_float(l["fields"].get("Quantite"))
-                        for l in all_details
+                        parse_float(l["fields"].get("Quantite")) for l in all_details_history
                         if l["fields"].get("Reference") == reference
                         and l["fields"].get("Statut") in ["Reservé", "Préparé", "Sortie produits"]
                         and (l["fields"].get("Site") == site_stock_bis)
@@ -445,99 +321,88 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     )
 
                     key_sec = f"{reference}_sec_{site_stock_bis}"
-                    deja_pris_sec = usage_tracker.get(key_sec, 0)
-
+                    deja_pris_sec = usage_tracker.get(key_sec, 0.0)
                     dispo_bis = q_inv_bis - q_resa_bis - deja_pris_sec
-                    
-                    if dispo_bis >= quantite:
-                        graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible", "Site":site_stock_bis, "Batiment":batiment_bis, "Emplacement":emplacement_bis})
-                        usage_tracker[key_sec] = deja_pris_sec + quantite
-                        continue 
 
-                # 3. Vérifie arrivage
+                    if dispo_bis >= quantite:
+                        graph_update_field(site_id, details_list_id, item_id, token, 
+                            {"Statut": "Disponible", "Site": site_stock_bis, "Batiment": batiment_bis, "Emplacement": emplacement_bis})
+                        usage_tracker[key_sec] = deja_pris_sec + quantite
+                        continue
+
+                # --- ARRIVAGES (SDF) ---
                 q_arriv = sum(
-                    parse_float(a["fields"].get("Quantite"))
-                    for a in arrivages
+                    parse_float(a["fields"].get("Quantite")) for a in arrivages
                     if a["fields"].get("Title") == reference and date_livraison and a["fields"].get("Date")
                     and datetime.strptime(a["fields"]["Date"][:10], "%Y-%m-%d") < date_livraison
                 )
                 q_en_cours = sum(
-                    parse_float(l["fields"].get("Quantite"))
-                    for l in all_details
+                    parse_float(l["fields"].get("Quantite")) for l in all_details_history
                     if l["fields"].get("Reference") == reference and l["fields"].get("Statut") == "Arrivage"
                 )
-                
-                key_arriv = f"{reference}_arrivage"
-                deja_pris_arriv = usage_tracker.get(key_arriv, 0)
 
+                key_arriv = f"{reference}_arrivage"
+                deja_pris_arriv = usage_tracker.get(key_arriv, 0.0)
                 dispo_arriv = (q_arriv - q_en_cours) - deja_pris_arriv
-                
+
                 if dispo_arriv >= quantite:
                     graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
                     usage_tracker[key_arriv] = deja_pris_arriv + quantite
-                    continue 
-                
+                    continue
+
+                # RUPTURE SDF
                 graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture SdF"})
                 ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
 
-            # LOGIQUE UKOBA
+            # -----------------------------------------------------------
+            # LOGIQUE ORIGINE : UKOBA (ou Autre)
+            # -----------------------------------------------------------
             else:
                 q_uko = sum(
-                    parse_float(u["fields"].get("Quantite"))
-                    for u in ukobas
+                    parse_float(u["fields"].get("Quantite")) for u in ukobas
                     if u["fields"].get("Title") == reference
                 )
                 
                 key_uko = f"{reference}_ukoba"
-                deja_pris_uko = usage_tracker.get(key_uko, 0)
-
+                deja_pris_uko = usage_tracker.get(key_uko, 0.0)
                 dispo_uko = q_uko - deja_pris_uko
-                
+
                 if dispo_uko >= quantite:
                     graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Disponible"})
                     usage_tracker[key_uko] = deja_pris_uko + quantite
-                    continue 
-                    
+                    continue
+
+                # ARRIVAGES (UKOBA) - On utilise la même logique d'arrivage
                 q_arriv = sum(
-                    parse_float(a["fields"].get("Quantite"))
-                    for a in arrivages
+                    parse_float(a["fields"].get("Quantite")) for a in arrivages
                     if a["fields"].get("Title") == reference and date_livraison and a["fields"].get("Date")
                     and datetime.strptime(a["fields"]["Date"][:10], "%Y-%m-%d") < date_livraison
                 )
                 
-                # Note: On réutilise la clé arrivage générale ou spécifique selon besoin.
-                # Ici on prend la même que SDF pour simplifier
                 key_arriv = f"{reference}_arrivage"
-                deja_pris_arriv = usage_tracker.get(key_arriv, 0)
+                deja_pris_arriv = usage_tracker.get(key_arriv, 0.0)
+                # Note: On suppose ici qu'il n'y a pas de réservation "en_cours" sur Ukoba, ou alors on l'ajoute si nécessaire
                 
                 if (q_arriv - deja_pris_arriv) >= quantite:
                     graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Arrivage"})
                     usage_tracker[key_arriv] = deja_pris_arriv + quantite
-                    continue 
-                
+                    continue
+
+                # RUPTURE UKOBA
                 graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Rupture Ukoba"})
                 ruptures.append({"reference": reference, "raison": "stock et arrivage insuffisants"})
 
-        if not ruptures:
-            statut_final = "OK"
-        else:
-            statut_final = "Rupture"
-            
+        # --- RETOUR FINAL ---
+        statut_final = "Rupture" if ruptures else "OK"
         retour = {
             "commande_id": commande_id,
             "statut": statut_final,
             "ruptures": ruptures,
             "nb_produits_commande": nb_lignes_commande
         }
-
-        return func.HttpResponse(
-            json.dumps(retour),
-            status_code=200,
-            mimetype="application/json"
-        )
+        
+        return func.HttpResponse(json.dumps(retour), status_code=200, mimetype="application/json")
 
     except Exception as e:
-        logging.exception("Erreur dans la fonction Azure")
+        logging.exception("Erreur critique dans la fonction Azure")
         return func.HttpResponse(f"Erreur serveur : {str(e)}", status_code=500)
-
-
