@@ -367,20 +367,21 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # reference_filters = " or ".join([f"fields/Title eq '{ref}'" for ref in references_utiles])
         filter_clauses = split_filter_queries("fields/Title", references_utiles, chunk_size=20)
 
-
-        # 2. Fait plusieurs appels à Graph API, un pour chaque bloc
-        all_details = []
-        for clause in filter_clauses:
-            all_details.extend(
-                graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
-            )
-
         # Optionnel : compter le nombre de lignes pour vérification
         logging.info(f"Nombre de lignes de détails récupérées : {len(details)}")
-        logging.info(f"Nombre de lignes de détails total : {len(all_details)}")
         nb_lignes_commande = len(details)
         ruptures = []
+        
         for detail in details:
+            # Fait plusieurs appels à Graph API, un pour chaque bloc
+            all_details = []
+            for clause in filter_clauses:
+                all_details.extend(
+                    graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
+                )
+                
+            logging.info(f"Nombre de lignes de détails total : {len(all_details)}")
+            
             d = detail["fields"]
             reference = d.get("Reference")
             item_id = detail["id"] 
