@@ -122,7 +122,7 @@ def graph_update_field(site_id, list_id, item_id, token, updates: dict):
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
-    # Utilisation de session (ESSENTIEL pour éviter l'erreur DNS en boucle)
+    # Utilisation de session (ESSENTIEL pour éviter l'erreur DNS en boucle) 
     res = session.patch(url, headers=headers, data=json.dumps(updates))
     
     if not res.ok:
