@@ -228,47 +228,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         arrivages = graph_list_items(site_id, arrivages_list_id, token)
         ukobas = graph_list_items(site_id, ukoba_list_id, token)
 
-        # --- Chargement Historique Optimisé (Uniquement SDF) ---
+        # --- Chargement Historique (Batch)
+        references_utiles = list(set(d["fields"].get("Title") for d in details if "fields" in d and d["fields"].get("Title")))
+        filter_clauses = split_filter_queries("fields/Title", references_utiles, chunk_size=20)
         
-        # 1. Création d'un dictionnaire produits pour lecture rapide (Hash Map)
-        # Cela évite de parcourir la liste 'produits' à chaque tour de boucle
-        produits_map = {
-            p["fields"].get("Title"): p["fields"] 
-            for p in produits 
-            if "fields" in p and p["fields"].get("Title")
-        }
-
-        # 2. Récupération des références uniques de la commande actuelle
-        toutes_refs_commande = list(set(
-            d["fields"].get("Reference") 
-            for d in details 
-            if "fields" in d and d["fields"].get("Reference")
-        ))
-
-        # 3. FILTRE : On ne garde que les références dont l'Origine est 'SDF'
-        references_sdf_only = []
-        for ref in toutes_refs_commande:
-            infos_produit = produits_map.get(ref)
-            # Si le produit existe et que son origine est SDF
-            if infos_produit and infos_produit.get("Origine") == "SDF":
-                references_sdf_only.append(ref)
-        
-        logging.info(f"Filtre Historique : {len(references_sdf_only)} refs SDF conservées sur {len(toutes_refs_commande)} refs totales.")
-
-        # 4. Construction des requêtes Batch uniquement sur les références SDF
         all_details_history = []
-        
-        if references_sdf_only:
-            filter_clauses = split_filter_queries("fields/Reference", references_sdf_only, chunk_size=20)
-            
-            logging.info(f"Chargement historique (SDF uniquement)... ({len(filter_clauses)} requêtes)")
-            for clause in filter_clauses:
-                # On ajoute le filtre Statut pour alléger encore plus (optionnel mais recommandé)
-                # clause += " and (fields/Statut eq 'Reservé' or fields/Statut eq 'Préparé' or fields/Statut eq 'Arrivage')"
-                all_details_history.extend(
-                    graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
-                )
-        
+        logging.info("Chargement historique des réservations...")
+        for clause in filter_clauses:
+            all_details_history.extend(
+                graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
+            )
         logging.info(f"Historique chargé : {len(all_details_history)} lignes.")
 
         # --- TRACKER DE STOCK VIRTUEL ---
