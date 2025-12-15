@@ -240,7 +240,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         # 2. Récupération des références uniques de la commande actuelle
         toutes_refs_commande = list(set(
-            d["fields"].get("Title") 
+            d["fields"].get("Reference") 
             for d in details 
             if "fields" in d and d["fields"].get("Reference")
         ))
