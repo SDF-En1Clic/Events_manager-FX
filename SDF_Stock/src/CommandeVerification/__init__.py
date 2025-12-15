@@ -242,7 +242,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         toutes_refs_commande = list(set(
             d["fields"].get("Title") 
             for d in details 
-            if "fields" in d and d["fields"].get("Title")
+            if "fields" in d and d["fields"].get("Reference")
         ))
 
         # 3. FILTRE : On ne garde que les références dont l'Origine est 'SDF'
