@@ -259,7 +259,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         all_details_history = []
         
         if references_sdf_only:
-            filter_clauses = split_filter_queries("fields/Title", references_sdf_only, chunk_size=20)
+            filter_clauses = split_filter_queries("fields/Reference", references_sdf_only, chunk_size=20)
             
             logging.info(f"Chargement historique (SDF uniquement)... ({len(filter_clauses)} requêtes)")
             for clause in filter_clauses:
