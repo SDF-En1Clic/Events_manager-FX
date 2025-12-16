@@ -279,7 +279,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         all_details_history.extend(
                             graph_filtered_items(site_id, details_list_id, token, filter_expr=full_filter)
                         )
-
+        logging.info(f"Historique chargé : {len(all_details_history)} lignes.")
         # --- TRACKER DE STOCK VIRTUEL ---
         usage_tracker = {}
         ruptures = []
