@@ -366,20 +366,60 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         inventaire = graph_list_items(site_id, inventaire_list_id, token)
         arrivages = graph_list_items(site_id, arrivages_list_id, token)
 
-        # Extraire toutes les références (Title) distinctes utilisées dans les détails de la commande
-        references_utiles = list(set(d["fields"].get("Title") for d in details if "fields" in d and d["fields"].get("Title")))
+                # --- Chargement Historique Optimisé (Uniquement SDF) ---
+        
+        # 1. Création d'un dictionnaire produits pour lecture rapide (Hash Map)
+        # Cela évite de parcourir la liste 'produits' à chaque tour de boucle
+        produits_map = {
+            p["fields"].get("Title"): p["fields"] 
+            for p in produits 
+            if "fields" in p and p["fields"].get("Title")
+        }
 
-        # Construire le filtre Graph API (limité en taille !)
-        # reference_filters = " or ".join([f"fields/Title eq '{ref}'" for ref in references_utiles])
-        filter_clauses = split_filter_queries("fields/Title", references_utiles, chunk_size=20)
+        # 2. Récupération des références uniques de la commande actuelle
+        toutes_refs_commande = list(set(
+            d["fields"].get("Reference") 
+            for d in details 
+            if "fields" in d and d["fields"].get("Reference")
+        ))
 
+        # 3. FILTRE : On ne garde que les références dont l'Origine est 'SDF'
+        references_sdf_only = []
+        for ref in toutes_refs_commande:
+            infos_produit = produits_map.get(ref)
+            # Si le produit existe et que son origine est SDF
+            if infos_produit and infos_produit.get("Origine") == "SDF":
+                references_sdf_only.append(ref)
+        
+        logging.info(f"Filtre Historique : {len(references_sdf_only)} refs SDF conservées sur {len(toutes_refs_commande)} refs totales.")
 
-        # 2. Fait plusieurs appels à Graph API, un pour chaque bloc
+        # 4. Construction des requêtes Batch uniquement sur les références SDF
         all_details = []
-        for clause in filter_clauses:
-            all_details.extend(
-                graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
-            )
+        
+        if references_sdf_only:
+                    # Note: J'ai laissé "fields/Reference" suite à la correction précédente
+                    filter_clauses = split_filter_queries("fields/Reference", references_sdf_only, chunk_size=20)
+                    
+                    logging.info(f"Chargement historique (SDF uniquement)... ({len(filter_clauses)} requêtes)")
+                    
+                    for clause in filter_clauses:
+                        # 1. On construit le filtre global
+                        # IMPORTANT : On met 'clause' (les références) entre parenthèses pour isoler les 'OR'
+                        full_filter = f"({clause})" 
+                        
+                        # 2. Ajout du filtre sur les statuts
+                        full_filter += " and (fields/Statut eq 'Reservé' or fields/Statut eq 'Préparé' or fields/Statut eq 'Sortie produits')"
+                        
+                        # 3. Ajout du filtre sur l'inventaire comptabilisé
+                        full_filter += " and fields/Comptabilise_inventaire ne 1"
+
+                        # 4. Appel API avec le filtre complet
+                        all_details.extend(
+                            graph_filtered_items(site_id, details_list_id, token, filter_expr=full_filter)
+                        )
+ 
+
+
 
         # Optionnel : compter le nombre de lignes pour vérification
         logging.info(f"Nombre de lignes de détails récupérées : {len(details)}")
