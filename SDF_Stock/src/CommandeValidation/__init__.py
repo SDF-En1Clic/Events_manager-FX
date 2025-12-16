@@ -162,6 +162,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse("Paramètre 'commande_id' requis", status_code=400)
 
         # --- Secrets
+
         tenant_id = get_secret("tenantid")
         client_id = get_secret("clientid")
         client_secret = get_secret("appsecret")
@@ -173,15 +174,18 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         arrivages_list_id = get_secret("arrivagesproduitslistid")
 
         # --- Auth
+
         token = get_graph_token(tenant_id, client_id, client_secret)
         if not token:
             return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
 
         # --- Logs de vérification
+
         nom_site = get_site_name(site_id, token)
         logging.info(f"Site : {nom_site}")
 
         # --- Commande
+
         commande_item = graph_get_item_by_id(site_id, commandes_list_id, commande_id, token)
         if not commande_item:
             return func.HttpResponse("Commande introuvable", status_code=404)
@@ -198,28 +202,73 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 date_livraison = None
 
         # --- Récupération des détails (lignes de commande)
+
         logging.info("Récupération des détails...")
         details = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq {commande_id}")
         nb_lignes_commande = len(details)
         logging.info(f"Nombre de lignes : {nb_lignes_commande}")
 
         # --- Chargement global
+
         logging.info("Chargement global (Produits, Inventaire, Arrivages)...")
         produits = graph_list_items(site_id, produits_list_id, token)
         inventaire = graph_list_items(site_id, inventaire_list_id, token)
         arrivages = graph_list_items(site_id, arrivages_list_id, token)
 
-        # --- Historique (Batch)
-        references_utiles = list(set(d["fields"].get("Title") for d in details if "fields" in d and d["fields"].get("Title")))
-        filter_clauses = split_filter_queries("fields/Title", references_utiles, chunk_size=20)
+        # --- Chargement Historique Optimisé (Uniquement SDF) ---
         
+        # 1. Création d'un dictionnaire produits pour lecture rapide (Hash Map)
+        # Cela évite de parcourir la liste 'produits' à chaque tour de boucle
+
+        produits_map = {
+            p["fields"].get("Title"): p["fields"] 
+            for p in produits 
+            if "fields" in p and p["fields"].get("Title")
+        }
+
+        # 2. Récupération des références uniques de la commande actuelle
+        
+        toutes_refs_commande = list(set(
+            d["fields"].get("Reference") 
+            for d in details 
+            if "fields" in d and d["fields"].get("Reference")
+        ))
+
+        # 3. FILTRE : On ne garde que les références dont l'Origine est 'SDF'
+        references_sdf_only = []
+        for ref in toutes_refs_commande:
+            infos_produit = produits_map.get(ref)
+            # Si le produit existe et que son origine est SDF
+            if infos_produit and infos_produit.get("Origine") == "SDF":
+                references_sdf_only.append(ref)
+        
+        logging.info(f"Filtre Historique : {len(references_sdf_only)} refs SDF conservées sur {len(toutes_refs_commande)} refs totales.")
+
+        # 4. Construction des requêtes Batch uniquement sur les références SDF
         all_details_history = []
-        logging.info("Chargement historique réservations...")
-        for clause in filter_clauses:
-            all_details_history.extend(
-                graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
-            )
-        logging.info(f"Historique : {len(all_details_history)} lignes.")
+        
+        if references_sdf_only:
+                    # Note: J'ai laissé "fields/Reference" suite à la correction précédente
+                    filter_clauses = split_filter_queries("fields/Reference", references_sdf_only, chunk_size=20)
+                    
+                    logging.info(f"Chargement historique (SDF uniquement)... ({len(filter_clauses)} requêtes)")
+                    
+                    for clause in filter_clauses:
+                        # 1. On construit le filtre global
+                        # IMPORTANT : On met 'clause' (les références) entre parenthèses pour isoler les 'OR'
+                        full_filter = f"({clause})" 
+                        
+                        # 2. Ajout du filtre sur les statuts
+                        full_filter += " and (fields/Statut eq 'Reservé' or fields/Statut eq 'Préparé' or fields/Statut eq 'Sortie produits')"
+                        
+                        # 3. Ajout du filtre sur l'inventaire comptabilisé
+                        full_filter += " and fields/Comptabilise_inventaire ne 1"
+
+                        # 4. Appel API avec le filtre complet
+                        all_details_history.extend(
+                            graph_filtered_items(site_id, details_list_id, token, filter_expr=full_filter)
+                        )
+        logging.info(f"Historique chargé : {len(all_details_history)} lignes.")
 
         # --- TRACKER DE STOCK (Pour gérer les doublons)
         usage_tracker = {}
