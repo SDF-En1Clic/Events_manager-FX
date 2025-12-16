@@ -259,17 +259,26 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         all_details_history = []
         
         if references_sdf_only:
-            filter_clauses = split_filter_queries("fields/Reference", references_sdf_only, chunk_size=20)
-            
-            logging.info(f"Chargement historique (SDF uniquement)... ({len(filter_clauses)} requêtes)")
-            for clause in filter_clauses:
-                # On ajoute le filtre Statut pour alléger encore plus (optionnel mais recommandé)
-                # clause += " and (fields/Statut eq 'Reservé' or fields/Statut eq 'Préparé' or fields/Statut eq 'Arrivage')"
-                all_details_history.extend(
-                    graph_filtered_items(site_id, details_list_id, token, filter_expr=clause)
-                )
-        
-        logging.info(f"Historique chargé : {len(all_details_history)} lignes.")
+                    # Note: J'ai laissé "fields/Reference" suite à la correction précédente
+                    filter_clauses = split_filter_queries("fields/Reference", references_sdf_only, chunk_size=20)
+                    
+                    logging.info(f"Chargement historique (SDF uniquement)... ({len(filter_clauses)} requêtes)")
+                    
+                    for clause in filter_clauses:
+                        # 1. On construit le filtre global
+                        # IMPORTANT : On met 'clause' (les références) entre parenthèses pour isoler les 'OR'
+                        full_filter = f"({clause})" 
+                        
+                        # 2. Ajout du filtre sur les statuts
+                        full_filter += " and (fields/Statut eq 'Reservé' or fields/Statut eq 'Préparé' or fields/Statut eq 'Sortie produits')"
+                        
+                        # 3. Ajout du filtre sur l'inventaire comptabilisé
+                        full_filter += " and fields/Comptabilise_inventaire ne 1"
+
+                        # 4. Appel API avec le filtre complet
+                        all_details_history.extend(
+                            graph_filtered_items(site_id, details_list_id, token, filter_expr=full_filter)
+                        )
 
         # --- TRACKER DE STOCK VIRTUEL ---
         usage_tracker = {}
