@@ -65,13 +65,14 @@ def graph_filtered_items(site_id, list_id, token, filter_expr=None):
     return results
 
 def graph_update_field(site_id, list_id, item_id, token, updates: dict):
+    # L'API Graph attend le payload directement sur l'endpoint /fields
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/fields"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     res = session.patch(url, headers=headers, json=updates)
     res.raise_for_status()
 
 def graph_execute_batch(token, batch_requests):
-    """Exécute un batch (max 20 requêtes) via Graph API pour être ultra-rapide"""
+    """Exécute un batch (max 20 requêtes) via Graph API"""
     url = "https://graph.microsoft.com/v1.0/$batch"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"requests": batch_requests}
@@ -80,7 +81,7 @@ def graph_execute_batch(token, batch_requests):
     return res.json()
 
 def download_first_attachment(site_id, list_id, item_id, token):
-    """Récupère le contenu binaire de la première pièce jointe de l'item"""
+    """Récupère le contenu binaire de la 1ère pièce jointe de l'élément SharePoint"""
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/driveItem"
     headers = {"Authorization": f"Bearer {token}"}
     res = session.get(url, headers=headers)
@@ -116,23 +117,22 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         client_secret = get_secret("appsecret")
         site_id = get_secret("siteid")
         
-        # NOTE : Assure-toi que ces secrets existent dans ton KeyVault, 
-        # ou remplace-les par les ID fixes si ce sont de nouvelles listes.
-        commandes_list_id = get_secret("cmdlistid") 
-        details_list_id = get_secret("cmddetailslistid")
-        config_list_id = get_secret("configlistid") # Nouvelle liste de ton Flow
+        # Mapping strict des listes (remplace ces valeurs en dur si pas dans KeyVault)
+        import_list_id = get_secret("importlistid") or "6b2e67e2-1804-4f67-ba70-a25351ec8da1"
+        details_list_id = get_secret("cmddetailslistid") or "d24aeeb6-47a8-415b-ad6f-186bdfde2a2f"
+        config_list_id = get_secret("configlistid") or "02dd96b5-f1e2-4c13-ab77-f63dbf045743"
 
         token = get_graph_token(tenant_id, client_id, client_secret)
         if not token:
             return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
 
-        # --- 2. Récupérer la commande
-        commande_item = graph_get_item_by_id(site_id, commandes_list_id, item_id, token)
-        if not commande_item:
-            return func.HttpResponse(f"Commande {item_id} introuvable", status_code=404)
+        # --- 2. Récupérer l'élément d'import
+        import_item = graph_get_item_by_id(site_id, import_list_id, item_id, token)
+        if not import_item:
+            return func.HttpResponse(f"Élément d'import {item_id} introuvable", status_code=404)
         
-        cmd_title = commande_item.get("fields", {}).get("Title")
-        type_import = commande_item.get("fields", {}).get("Type_import")
+        cmd_title = import_item.get("fields", {}).get("Title")
+        type_import = import_item.get("fields", {}).get("Type_import")
 
         if not type_import:
             return func.HttpResponse("Type_import non défini sur la commande.", status_code=400)
@@ -148,7 +148,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "method": "DELETE",
                 "url": f"/sites/{site_id}/lists/{details_list_id}/items/{item['id']}"
             })
-            if len(delete_batch) == 20: # Limite Graph API = 20
+            if len(delete_batch) == 20: 
                 graph_execute_batch(token, delete_batch)
                 delete_batch = []
         if delete_batch:
@@ -156,12 +156,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         # --- 4. Télécharger la PJ
         logging.info("Téléchargement de la PJ...")
-        file_content = download_first_attachment(site_id, commandes_list_id, item_id, token)
+        file_content = download_first_attachment(site_id, import_list_id, item_id, token)
         if not file_content:
             return func.HttpResponse("Aucune pièce jointe trouvée", status_code=400)
 
         statut_import = "oui"
-        nouveaux_details = [] # Liste pour préparer le batch d'insertion
+        nouveaux_details = []
 
         # --- 5. COMMUTATEUR (SWITCH)
         if type_import in ["Fichier prestation", "Fichier grossiste"]:
@@ -179,7 +179,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if bypass != "ok" and total_prix_excel != total_prix_bdd:
                 statut_import = "maj"
 
-            # Préparation des lignes
             df_datas = df_datas.dropna(subset=['Ligne'])
             for _, row in df_datas.iterrows():
                 ligne_val = str(row.get('Ligne', ''))
@@ -195,18 +194,21 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         elif type_import == "Fichier Finale3D":
             # --- LECTURE CSV FINALE3D ---
-            # Header=None car on split via index comme dans Automate
-            df_csv = pd.read_csv(io.BytesIO(file_content), sep=';', header=None, dtype=str).fillna("")
+            try:
+                csv_text = file_content.decode('utf-8') 
+            except UnicodeDecodeError:
+                csv_text = file_content.decode('latin-1')
+            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str).fillna("")
             
             for _, row in df_csv.iterrows():
-                ref = str(row[0]).strip()
-                if ref.lower() in ["rfrence", "référence", ""]: continue # Ignore header ou vide
+                ref = str(row.get(0, "")).strip()
+                if ref.lower() in ["rfrence", "référence", ""]: continue
 
                 nouveaux_details.append({
-                    "Title": str(row[2]),
+                    "Title": str(row.get(2, "")),
                     "Reference": ref,
-                    "Description_pyro": str(row[1]),
-                    "Quantite": str(row[3]),
+                    "Description_pyro": str(row.get(1, "")),
+                    "Quantite": str(row.get(3, "")),
                     "Comptabilise_inventaire": 0,
                     "Statut": "Attente validation",
                     "CMD_ID": cmd_title
@@ -214,29 +216,35 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         elif type_import == "Fichier pyromotion":
             # --- LECTURE CSV PYROMOTION ---
-            df_csv = pd.read_csv(io.BytesIO(file_content), sep=';', header=None, dtype=str).fillna("")
+            try:
+                csv_text = file_content.decode('utf-8') 
+            except UnicodeDecodeError:
+                csv_text = file_content.decode('latin-1')
+            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str).fillna("")
+            
             ligne_memoire = "0"
             for _, row in df_csv.iterrows():
-                col0 = str(row[0])
+                col0 = str(row.get(0, ""))
                 if "Ligne" in col0:
                     ligne_memoire = col0.split(' ')[1].strip() if len(col0.split(' ')) > 1 else "0"
                 else:
-                    ref = str(row[1]).strip()
+                    ref = str(row.get(1, "")).strip()
                     if ref:
                         nouveaux_details.append({
                             "Title": ligne_memoire,
                             "Reference": ref,
-                            "Quantite": str(row[3]).strip(),
+                            "Quantite": str(row.get(3, "")).strip(),
                             "Statut": "Attente validation",
                             "CMD_ID": cmd_title
                         })
 
         elif type_import == "Fichier FWSIM":
             # --- LECTURE CSV FWSIM ---
-            df_csv = pd.read_csv(io.BytesIO(file_content), sep=';', header=None, dtype=str).fillna("")
-            
-            # NOTE: Dans Power Automate tu créais un élément dans la liste "Déclenchement analyse pyro"
-            # Si nécessaire, ajoute le post ici via graph_execute_batch ou un call direct.
+            try:
+                csv_text = file_content.decode('utf-8') 
+            except UnicodeDecodeError:
+                csv_text = file_content.decode('latin-1')
+            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str).fillna("")
             
             chain_id = ""
             module_v = ""
@@ -244,32 +252,42 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             line_v = ""
 
             for _, row in df_csv.iterrows():
-                col0 = str(row[0])
-                if "Time" in col0 or col0 == "": continue
+                            col0 = str(row.get(0, "")).strip() 
+                            if "Time" in col0 or col0 == "": 
+                                continue
 
-                current_chain = str(row[8]) if len(row) > 8 else ""
-                
-                if current_chain != chain_id and current_chain != "":
-                    chain_id = current_chain
-                    line_v = str(row[10]) if len(row) > 10 else ""
-                    pin_v = str(row[6]) if len(row) > 6 else ""
-                    module_v = str(row[5]) if len(row) > 5 else ""
+                            current_chain = str(row.get(8, "")).strip()
+                            if current_chain != chain_id and current_chain != "":
+                                chain_id = current_chain
+                                module_v = str(row.get(5, "")).strip()
+                                pin_v = str(row.get(6, "")).strip()   
+                                line_v = str(row.get(10, "")).strip() 
 
-                ref = str(row[1])
-                qty = str(row[3]).strip()
-                
-                titre = f"{module_v}-{pin_v}" if not line_v else line_v
-                if str(row[9]) == chain_id: # Condition Automate
-                     titre = str(row[9])
+                            ref = str(row.get(1, "")).strip()
+                            qty = str(row.get(3, "")).strip()
+                            col9 = str(row.get(9, "")).strip()
 
-                nouveaux_details.append({
-                    "Title": titre,
-                    "Reference": ref,
-                    "Quantite": qty,
-                    "Statut": "Attente validation",
-                    "CMD_ID": cmd_title
-                })
+                            # ==========================================
+                            # NOUVELLE CONDITION : Ignorer si "MAT"
+                            # ==========================================
+                            if "MAT" in col9:  # (ou col9 == "MAT" si ça doit être exact)
+                                continue
+                            # ==========================================
 
+                            if col9 == chain_id:
+                                titre = col9
+                            elif line_v == "" or line_v == "nan": 
+                                titre = f"{module_v}-{pin_v}"
+                            else:
+                                titre = line_v
+
+                            nouveaux_details.append({
+                                "Title": titre,
+                                "Reference": ref,
+                                "Quantite": qty,
+                                "Statut": "Attente validation",
+                                "CMD_ID": cmd_title
+                            })
         else:
             return func.HttpResponse(f"Type import inconnu: {type_import}", status_code=400)
 
@@ -291,8 +309,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if post_batch:
             graph_execute_batch(token, post_batch)
 
-        # --- 7. Mise à jour de la commande parente
-        graph_update_field(site_id, commandes_list_id, item_id, token, {"StatutImport": statut_import})
+        # --- 7. Mise à jour de l'élément d'import
+        # On met à jour l'élément depuis lequel le flux a été lancé (import_list_id)
+        graph_update_field(site_id, import_list_id, item_id, token, {"StatutImport": statut_import})
         
         logging.info("Import terminé avec succès !")
         return func.HttpResponse(json.dumps({"status": "success", "lignes_creees": len(nouveaux_details)}), mimetype="application/json", status_code=200)
