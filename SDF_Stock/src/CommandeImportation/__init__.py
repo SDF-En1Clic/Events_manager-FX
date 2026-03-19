@@ -118,9 +118,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         site_id = get_secret("siteid")
         
         # Mapping strict des listes (remplace ces valeurs en dur si pas dans KeyVault)
-        import_list_id = get_secret("importlistid") or "6b2e67e2-1804-4f67-ba70-a25351ec8da1"
-        details_list_id = get_secret("cmddetailslistid") or "d24aeeb6-47a8-415b-ad6f-186bdfde2a2f"
-        config_list_id = get_secret("configlistid") or "02dd96b5-f1e2-4c13-ab77-f63dbf045743"
+        import_list_id = get_secret("importlistid") 
+        details_list_id = get_secret("cmddetailslistid") 
+        config_list_id = get_secret("configlistid") 
 
         token = get_graph_token(tenant_id, client_id, client_secret)
         if not token:
@@ -270,7 +270,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                             # ==========================================
                             # NOUVELLE CONDITION : Ignorer si "MAT"
                             # ==========================================
-                            if "Mat" in col9:  # (ou col9 == "MAT" si ça doit être exact)
+                            if "Mat" in col9:  
                                 continue
                             # ==========================================
 

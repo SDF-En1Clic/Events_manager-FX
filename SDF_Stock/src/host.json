@@ -3,7 +3,8 @@
   "functions": [
     "CommandeValidation",
 	  "CommandeVerification",
-	  "CommandeReception"
+	  "CommandeReception",
+    "CommandeImportation"
   ],
   "logging": {
     "applicationInsights": {
