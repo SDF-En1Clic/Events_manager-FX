@@ -270,7 +270,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                             # ==========================================
                             # NOUVELLE CONDITION : Ignorer si "MAT"
                             # ==========================================
-                            if "MAT" in col9:  # (ou col9 == "MAT" si ça doit être exact)
+                            if "Mat" in col9:  # (ou col9 == "MAT" si ça doit être exact)
                                 continue
                             # ==========================================
 
