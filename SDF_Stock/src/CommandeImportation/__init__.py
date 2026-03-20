@@ -6,6 +6,7 @@ import requests
 import urllib.parse
 import json
 import pandas as pd
+import openpyxl
 import io
 import base64  # <-- NOUVEL IMPORT POUR DÉCODER LE FICHIER
 
@@ -23,6 +24,35 @@ def get_secret(name: str):
     credential = DefaultAzureCredential()
     client = SecretClient(vault_url=VAULT_URL, credential=credential)
     return client.get_secret(name).value
+
+import openpyxl
+
+def get_excel_table_as_df(file_bytes, table_name):
+    """
+    Cherche un 'Tableau' (ListObject) Excel par son nom dans tout le classeur,
+    extrait ses données et renvoie un DataFrame Pandas.
+    """
+    # data_only=True permet de lire les valeurs (pas les formules Excel)
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    
+    for sheet in wb.worksheets:
+        if table_name in sheet.tables:
+            table = sheet.tables[table_name]
+            # Récupère la plage de cellules du tableau (ex: "A1:C10")
+            table_range = sheet[table.ref]
+            
+            # Extraction des valeurs
+            data = [[cell.value for cell in row] for row in table_range]
+            
+            if not data:
+                return pd.DataFrame()
+                
+            # La première ligne correspond aux en-têtes (noms des colonnes)
+            columns = data[0]
+            rows = data[1:]
+            return pd.DataFrame(rows, columns=columns)
+            
+    raise ValueError(f"Le tableau Excel '{table_name}' est introuvable dans le fichier.")
 
 def get_graph_token(tenant_id, client_id, client_secret):
     url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
@@ -165,13 +195,22 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         statut_import = "oui"
         nouveaux_details = []
 
-        # --- 4. COMMUTATEUR (SWITCH) ---
+# --- 4. COMMUTATEUR (SWITCH) ---
         if type_import in ["Fichier prestation", "Fichier grossiste"]:
-            # --- LECTURE EXCEL ---
-            df_total = pd.read_excel(io.BytesIO(file_content), sheet_name='TabTotal')
-            df_datas = pd.read_excel(io.BytesIO(file_content), sheet_name='TabDatas')
+            # --- LECTURE EXCEL (Par Nom de Tableau) ---
+            try:
+                df_total = get_excel_table_as_df(file_content, 'TabTotal')
+                df_datas = get_excel_table_as_df(file_content, 'TabDatas')
+            except ValueError as e:
+                logging.error(str(e))
+                return func.HttpResponse(str(e), status_code=400)
+            except Exception as e:
+                logging.error(f"Erreur lors de la lecture de l'Excel : {str(e)}")
+                return func.HttpResponse("Fichier Excel invalide ou corrompu.", status_code=400)
             
-            total_prix_excel = str(df_total.iloc[0].get('TotalPrix', ''))
+            # Vérification du prix
+            # Note: iloc[0] prend la 1ère ligne de données. On s'assure que la colonne existe.
+            total_prix_excel = str(df_total.iloc[0].get('TotalPrix', '')) if not df_total.empty else ""
 
             # Vérif BDD Config
             clef_config = 'TotalPrixTarifsPresta' if type_import == "Fichier prestation" else 'TotalPrixTarifsGrossiste'
@@ -181,6 +220,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if bypass != "ok" and total_prix_excel != total_prix_bdd:
                 statut_import = "maj"
 
+            # Nettoyage et préparation des lignes
             df_datas = df_datas.dropna(subset=['Ligne'])
             for _, row in df_datas.iterrows():
                 ligne_val = str(row.get('Ligne', ''))
