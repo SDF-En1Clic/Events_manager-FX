@@ -220,7 +220,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if bypass != "ok" and total_prix_excel != total_prix_bdd:
                 statut_import = "maj"
 
-            # Nettoyage et préparation des lignes
+            # Nettoyage et préparation des lignes 
             df_datas = df_datas.dropna(subset=['Ligne'])
             for _, row in df_datas.iterrows():
                 ligne_val = str(row.get('Ligne', ''))
