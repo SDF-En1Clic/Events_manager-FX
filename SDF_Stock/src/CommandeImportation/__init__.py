@@ -7,6 +7,7 @@ import urllib.parse
 import json
 import pandas as pd
 import io
+import base64  # <-- NOUVEL IMPORT POUR DÉCODER LE FICHIER
 
 # --------- CONFIG GLOBALE -------------
 VAULT_URL = "https://events-manager-kv.vault.azure.net/"
@@ -65,7 +66,6 @@ def graph_filtered_items(site_id, list_id, token, filter_expr=None):
     return results
 
 def graph_update_field(site_id, list_id, item_id, token, updates: dict):
-    # L'API Graph attend le payload directement sur l'endpoint /fields
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/fields"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     res = session.patch(url, headers=headers, json=updates)
@@ -80,19 +80,6 @@ def graph_execute_batch(token, batch_requests):
     res.raise_for_status()
     return res.json()
 
-def download_first_attachment(site_id, list_id, item_id, token):
-    """Récupère le contenu binaire de la 1ère pièce jointe de l'élément SharePoint"""
-    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/driveItem"
-    headers = {"Authorization": f"Bearer {token}"}
-    res = session.get(url, headers=headers)
-    if not res.ok: return None
-    drive_item = res.json()
-    
-    download_url = drive_item.get("@microsoft.graph.downloadUrl")
-    if download_url:
-        content_res = session.get(download_url)
-        return content_res.content
-    return None
 
 # ==============================================================================
 # FONCTION PRINCIPALE
@@ -104,20 +91,27 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         req_body = req.get_json()
         item_id = req_body.get('number')
         bypass = req_body.get('text', '').lower()
+        file_b64 = req_body.get('file_base64') # <-- Récupération du fichier encodé
     except ValueError:
         return func.HttpResponse("Invalid JSON", status_code=400)
 
     if not item_id:
         return func.HttpResponse("L'ID (number) est requis.", status_code=400)
+        
+    if not file_b64:
+        return func.HttpResponse("Aucun fichier (file_base64) n'a été transmis.", status_code=400)
 
     try:
-        # --- 1. Init Secrets & Token
+        # --- DÉCODAGE DE LA PIÈCE JOINTE ---
+        logging.info("Décodage de la pièce jointe reçue depuis Power Automate...")
+        file_content = base64.b64decode(file_b64)
+
+        # --- 1. Init Secrets & Token ---
         tenant_id = get_secret("tenantid")
         client_id = get_secret("clientid")
         client_secret = get_secret("appsecret")
         site_id = get_secret("siteid")
         
-        # Mapping strict des listes (remplace ces valeurs en dur si pas dans KeyVault)
         import_list_id = get_secret("importlistid") 
         details_list_id = get_secret("cmddetailslistid") 
         config_list_id = get_secret("configlistid") 
@@ -126,7 +120,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if not token:
             return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
 
-        # --- 2. Récupérer l'élément d'import
+        # --- 2. Récupérer l'élément d'import ---
         import_item = graph_get_item_by_id(site_id, import_list_id, item_id, token)
         if not import_item:
             return func.HttpResponse(f"Élément d'import {item_id} introuvable", status_code=404)
@@ -137,7 +131,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if not type_import:
             return func.HttpResponse("Type_import non défini sur la commande.", status_code=400)
 
-        # --- 3. Purger les anciens détails (Batch Delete)
+        # --- 3. Purger les anciens détails (Batch Delete) ---
         logging.info(f"Purge des anciens détails pour CMD_ID: {cmd_title}")
         old_items = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq '{cmd_title}'")
         
@@ -154,16 +148,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if delete_batch:
             graph_execute_batch(token, delete_batch)
 
-        # --- 4. Télécharger la PJ
-        logging.info("Téléchargement de la PJ...")
-        file_content = download_first_attachment(site_id, import_list_id, item_id, token)
-        if not file_content:
-            return func.HttpResponse("Aucune pièce jointe trouvée", status_code=400)
-
         statut_import = "oui"
         nouveaux_details = []
 
-        # --- 5. COMMUTATEUR (SWITCH)
+        # --- 4. COMMUTATEUR (SWITCH) ---
         if type_import in ["Fichier prestation", "Fichier grossiste"]:
             # --- LECTURE EXCEL ---
             df_total = pd.read_excel(io.BytesIO(file_content), sheet_name='TabTotal')
@@ -252,47 +240,44 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             line_v = ""
 
             for _, row in df_csv.iterrows():
-                            col0 = str(row.get(0, "")).strip() 
-                            if "Time" in col0 or col0 == "": 
-                                continue
+                col0 = str(row.get(0, "")).strip() 
+                if "Time" in col0 or col0 == "": 
+                    continue
 
-                            current_chain = str(row.get(8, "")).strip()
-                            if current_chain != chain_id and current_chain != "":
-                                chain_id = current_chain
-                                module_v = str(row.get(5, "")).strip()
-                                pin_v = str(row.get(6, "")).strip()   
-                                line_v = str(row.get(10, "")).strip() 
+                current_chain = str(row.get(8, "")).strip()
+                if current_chain != chain_id and current_chain != "":
+                    chain_id = current_chain
+                    module_v = str(row.get(5, "")).strip()
+                    pin_v = str(row.get(6, "")).strip()   
+                    line_v = str(row.get(10, "")).strip() 
 
-                            ref = str(row.get(1, "")).strip()
-                            qty = str(row.get(3, "")).strip()
-                            col9 = str(row.get(9, "")).strip()
+                ref = str(row.get(1, "")).strip()
+                qty = str(row.get(3, "")).strip()
+                col9 = str(row.get(9, "")).strip()
 
-                            # ==========================================
-                            # NOUVELLE CONDITION : Ignorer si "MAT"
-                            # ==========================================
-                            if "Mat" in col9:  
-                                continue
-                            # ==========================================
+                # --- CONDITION IGNORER "MAT" ---
+                if "MAT" in col9.upper():  
+                    continue
+                # -------------------------------
 
-                            if col9 == chain_id:
-                                titre = col9
-                            elif line_v == "" or line_v == "nan": 
-                                titre = f"{module_v}-{pin_v}"
-                            else:
-                                titre = line_v
+                if col9 == chain_id:
+                    titre = col9
+                elif line_v == "" or line_v == "nan": 
+                    titre = f"{module_v}-{pin_v}"
+                else:
+                    titre = line_v
 
-                            nouveaux_details.append({
-                                "Title": titre,
-                                "Reference": ref,
-                                "Quantite": qty,
-                                "Statut": "Attente validation",
-                                "CMD_ID": cmd_title
-                            })
+                nouveaux_details.append({
+                    "Title": titre,
+                    "Reference": ref,
+                    "Quantite": qty,
+                    "Statut": "Attente validation",
+                    "CMD_ID": cmd_title
+                })
         else:
             return func.HttpResponse(f"Type import inconnu: {type_import}", status_code=400)
 
-
-        # --- 6. Insertion Massive (Batch Post)
+        # --- 5. Insertion Massive (Batch Post) ---
         logging.info(f"Création de {len(nouveaux_details)} nouvelles lignes...")
         post_batch = []
         for index, item_payload in enumerate(nouveaux_details):
@@ -309,8 +294,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if post_batch:
             graph_execute_batch(token, post_batch)
 
-        # --- 7. Mise à jour de l'élément d'import
-        # On met à jour l'élément depuis lequel le flux a été lancé (import_list_id)
+        # --- 6. Mise à jour de l'élément d'import ---
         graph_update_field(site_id, import_list_id, item_id, token, {"StatutImport": statut_import})
         
         logging.info("Import terminé avec succès !")
