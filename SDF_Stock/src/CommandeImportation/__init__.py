@@ -104,7 +104,21 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         # --- DÉCODAGE DE LA PIÈCE JOINTE ---
         logging.info("Décodage de la pièce jointe reçue depuis Power Automate...")
-        file_content = base64.b64decode(file_b64)
+        # --- DÉCODAGE DE LA PIÈCE JOINTE ---
+        logging.info("Décodage de la pièce jointe reçue depuis Power Automate...")
+        
+        # Nettoyage au cas où Power Automate rajouterait un préfixe
+        if "base64," in file_b64:
+            file_b64 = file_b64.split("base64,")[-1]
+
+        try:
+            # 1er essai : on tente le décodage Base64 classique (idéal pour Excel)
+            file_content = base64.b64decode(file_b64)
+        except (ValueError, UnicodeEncodeError):
+            # 2ème essai : Power Automate a envoyé le fichier EN CLAIR (texte brut)
+            # Ça arrive souvent avec les CSV car PA les "lit" automatiquement.
+            logging.warning("Le fichier n'est pas du Base64 pur. Traitement direct comme texte brut.")
+            file_content = file_b64.encode('utf-8')
 
         # --- 1. Init Secrets & Token ---
         tenant_id = get_secret("tenantid")
