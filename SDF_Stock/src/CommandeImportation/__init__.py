@@ -112,7 +112,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             file_b64 = file_b64.split("base64,")[-1]
 
         try:
-            # 1er essai : on tente le décodage Base64 classique (idéal pour Excel)
+            # 1er essai : on tente le décodage Base64 classique (idéal pour Excel) 
             file_content = base64.b64decode(file_b64)
         except (ValueError, UnicodeEncodeError):
             # 2ème essai : Power Automate a envoyé le fichier EN CLAIR (texte brut)
