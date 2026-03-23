@@ -280,24 +280,34 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             line_v = ""
 
             for _, row in df_csv.iterrows():
+                # 0 = Time | 1 = Réf
                 col0 = str(row.get(0, "")).strip() 
-                if "Time" in col0 or col0 == "": 
+                ref = str(row.get(1, "")).strip()
+                
+                # 1. On ignore SEULEMENT la ligne d'en-tête
+                if "Time" in col0: 
+                    continue
+                    
+                # 2. On ignore les lignes TOTALEMENT vides (fin de fichier)
+                if col0 == "" and ref == "":
                     continue
 
-                current_chain = str(row.get(8, "")).strip()
+                # 7 = Chain ID
+                current_chain = str(row.get(7, "")).strip()
                 if current_chain != chain_id and current_chain != "":
                     chain_id = current_chain
-                    module_v = str(row.get(5, "")).strip()
-                    pin_v = str(row.get(6, "")).strip()   
-                    line_v = str(row.get(10, "")).strip() 
+                    module_v = str(row.get(4, "")).strip()  # 4 = Module
+                    pin_v = str(row.get(5, "")).strip()     # 5 = Pin   
+                    line_v = str(row.get(10, "")).strip()   # 10 = Colonne K (Ligne brute ?)
 
-                ref = str(row.get(1, "")).strip()
-                qty = str(row.get(3, "")).strip()
-                col9 = str(row.get(9, "")).strip()
+                qty = str(row.get(3, "")).strip()       # 3 = Quantité
+                col9 = str(row.get(9, "")).strip()      # 9 = Address (Ou MAT)
 
+                # Si la colonne J (Address) contient "MAT", on ignore l'article
                 if "MAT" in col9.upper():  
                     continue
 
+                # Traitement du Titre (Variable "Ligne" dans Power Automate)
                 if col9 == chain_id:
                     titre = col9
                 elif line_v == "" or line_v == "nan": 
