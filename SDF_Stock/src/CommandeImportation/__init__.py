@@ -228,8 +228,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 csv_text = file_content.decode('utf-8') 
             except UnicodeDecodeError:
                 csv_text = file_content.decode('latin-1')
-            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str).fillna("")
-            
+            # Le names=range(10) force la création de 10 colonnes pour éviter le crash des lignes inégales
+            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str, names=range(10)).fillna("")
             for _, row in df_csv.iterrows():
                 ref = str(row.get(0, "")).strip()
                 if ref.lower() in ["rfrence", "référence", ""]: continue
@@ -249,7 +249,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 csv_text = file_content.decode('utf-8') 
             except UnicodeDecodeError:
                 csv_text = file_content.decode('latin-1')
-            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str).fillna("")
+            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str, names=range(10)).fillna("")
             
             ligne_memoire = "0"
             for _, row in df_csv.iterrows():
@@ -272,7 +272,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 csv_text = file_content.decode('utf-8') 
             except UnicodeDecodeError:
                 csv_text = file_content.decode('latin-1')
-            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str).fillna("")
+            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str, names=range(15)).fillna("")
             
             chain_id = ""
             module_v = ""
