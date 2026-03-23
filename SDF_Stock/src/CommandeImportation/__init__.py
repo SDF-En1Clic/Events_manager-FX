@@ -277,7 +277,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             chain_id = ""
             module_v = ""
             pin_v = ""
-            line_v = ""
 
             for _, row in df_csv.iterrows():
                 # 0 = Time | 1 = Réf
@@ -296,24 +295,25 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 current_chain = str(row.get(7, "")).strip()
                 if current_chain != chain_id and current_chain != "":
                     chain_id = current_chain
-                    module_v = str(row.get(4, "")).strip()  # 4 = Module
-                    pin_v = str(row.get(5, "")).strip()     # 5 = Pin   
-                    line_v = str(row.get(10, "")).strip()   # 10 = Colonne K (Ligne brute ?)
+                    module_v = str(row.get(4, "")).strip()  # 4 = Module (E)
+                    pin_v = str(row.get(5, "")).strip()     # 5 = Pin (F)
 
-                qty = str(row.get(3, "")).strip()       # 3 = Quantité
-                col9 = str(row.get(9, "")).strip()      # 9 = Address (Ou MAT)
+                qty = str(row.get(3, "")).strip()           # 3 = Quantité (D)
+                col_address = str(row.get(9, "")).strip()   # 9 = Address (J)
 
                 # Si la colonne J (Address) contient "MAT", on ignore l'article
-                if "MAT" in col9.upper():  
+                if "MAT" in col_address.upper():  
                     continue
 
                 # Traitement du Titre (Variable "Ligne" dans Power Automate)
-                if col9 == chain_id:
-                    titre = col9
-                elif line_v == "" or line_v == "nan": 
+                if col_address == chain_id:
+                    titre = col_address
+                elif col_address == "" or col_address.lower() == "nan": 
+                    # Si pas d'adresse, on fait la combinaison Module-Pin
                     titre = f"{module_v}-{pin_v}"
                 else:
-                    titre = line_v
+                    # Sinon, on prend l'adresse
+                    titre = col_address
 
                 nouveaux_details.append({
                     "Title": titre,
