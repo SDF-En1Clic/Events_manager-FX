@@ -8,7 +8,7 @@ import json
 import pandas as pd
 import openpyxl
 import io
-import base64  # <-- NOUVEL IMPORT POUR DÉCODER LE FICHIER
+import base64
 
 # --------- CONFIG GLOBALE -------------
 VAULT_URL = "https://events-manager-kv.vault.azure.net/"
@@ -20,34 +20,36 @@ adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
 session.mount('https://', adapter)
 # ---------------------------------------------------
 
+def json_response(data: dict, status_code: int = 200) -> func.HttpResponse:
+    """Utilitaire pour renvoyer des réponses JSON standardisées."""
+    return func.HttpResponse(
+        json.dumps(data),
+        mimetype="application/json",
+        status_code=status_code
+    )
+
 def get_secret(name: str):
     credential = DefaultAzureCredential()
     client = SecretClient(vault_url=VAULT_URL, credential=credential)
     return client.get_secret(name).value
-
-import openpyxl
 
 def get_excel_table_as_df(file_bytes, table_name):
     """
     Cherche un 'Tableau' (ListObject) Excel par son nom dans tout le classeur,
     extrait ses données et renvoie un DataFrame Pandas.
     """
-    # data_only=True permet de lire les valeurs (pas les formules Excel)
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     
     for sheet in wb.worksheets:
         if table_name in sheet.tables:
             table = sheet.tables[table_name]
-            # Récupère la plage de cellules du tableau (ex: "A1:C10")
             table_range = sheet[table.ref]
             
-            # Extraction des valeurs
             data = [[cell.value for cell in row] for row in table_range]
             
             if not data:
                 return pd.DataFrame()
                 
-            # La première ligne correspond aux en-têtes (noms des colonnes)
             columns = data[0]
             rows = data[1:]
             return pd.DataFrame(rows, columns=columns)
@@ -102,7 +104,6 @@ def graph_update_field(site_id, list_id, item_id, token, updates: dict):
     res.raise_for_status()
 
 def graph_execute_batch(token, batch_requests):
-    """Exécute un batch (max 20 requêtes) via Graph API"""
     url = "https://graph.microsoft.com/v1.0/$batch"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"requests": batch_requests}
@@ -110,43 +111,38 @@ def graph_execute_batch(token, batch_requests):
     res.raise_for_status()
     return res.json()
 
-
 # ==============================================================================
 # FONCTION PRINCIPALE
 # ==============================================================================
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Début du traitement Import Commande.')
+    
+    # Variables globales pour le retour d'erreur
+    cmd_title = "Inconnu"
+    type_import = "Inconnu"
 
     try:
         req_body = req.get_json()
         item_id = req_body.get('number')
         bypass = req_body.get('text', '').lower()
-        file_b64 = req_body.get('file_base64') # <-- Récupération du fichier encodé
+        file_b64 = req_body.get('file_base64')
     except ValueError:
-        return func.HttpResponse("Invalid JSON", status_code=400)
+        return json_response({"status": "error", "message": "Invalid JSON reçu par l'API."}, 400)
 
     if not item_id:
-        return func.HttpResponse("L'ID (number) est requis.", status_code=400)
+        return json_response({"status": "error", "message": "L'ID (number) est requis."}, 400)
         
     if not file_b64:
-        return func.HttpResponse("Aucun fichier (file_base64) n'a été transmis.", status_code=400)
+        return json_response({"status": "error", "message": "Aucun fichier (file_base64) n'a été transmis.", "cmd_id": item_id}, 400)
 
     try:
-        # --- DÉCODAGE DE LA PIÈCE JOINTE ---
         logging.info("Décodage de la pièce jointe reçue depuis Power Automate...")
-        # --- DÉCODAGE DE LA PIÈCE JOINTE ---
-        logging.info("Décodage de la pièce jointe reçue depuis Power Automate...")
-        
-        # Nettoyage au cas où Power Automate rajouterait un préfixe
         if "base64," in file_b64:
             file_b64 = file_b64.split("base64,")[-1]
 
         try:
-            # 1er essai : on tente le décodage Base64 classique (idéal pour Excel) 
             file_content = base64.b64decode(file_b64)
         except (ValueError, UnicodeEncodeError):
-            # 2ème essai : Power Automate a envoyé le fichier EN CLAIR (texte brut)
-            # Ça arrive souvent avec les CSV car PA les "lit" automatiquement.
             logging.warning("Le fichier n'est pas du Base64 pur. Traitement direct comme texte brut.")
             file_content = file_b64.encode('utf-8')
 
@@ -162,20 +158,20 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         token = get_graph_token(tenant_id, client_id, client_secret)
         if not token:
-            return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
+            return json_response({"status": "error", "message": "Échec de l'authentification Graph API."}, 500)
 
         # --- 2. Récupérer l'élément d'import ---
         import_item = graph_get_item_by_id(site_id, import_list_id, item_id, token)
         if not import_item:
-            return func.HttpResponse(f"Élément d'import {item_id} introuvable", status_code=404)
+            return json_response({"status": "error", "message": f"Élément d'import {item_id} introuvable dans SharePoint."}, 404)
         
-        cmd_title = import_item.get("fields", {}).get("Title")
+        cmd_title = import_item.get("fields", {}).get("Title", "Inconnu")
         type_import = import_item.get("fields", {}).get("Type_import")
 
         if not type_import:
-            return func.HttpResponse("Type_import non défini sur la commande.", status_code=400)
+            return json_response({"status": "error", "message": "La colonne 'Type_import' est vide sur la commande.", "cmd_id": cmd_title}, 400)
 
-        # --- 3. Purger les anciens détails (Batch Delete) ---
+        # --- 3. Purger les anciens détails ---
         logging.info(f"Purge des anciens détails pour CMD_ID: {cmd_title}")
         old_items = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq '{cmd_title}'")
         
@@ -195,24 +191,18 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         statut_import = "oui"
         nouveaux_details = []
 
-# --- 4. COMMUTATEUR (SWITCH) ---
+        # --- 4. COMMUTATEUR (SWITCH) ---
         if type_import in ["Fichier prestation", "Fichier grossiste"]:
-            # --- LECTURE EXCEL (Par Nom de Tableau) ---
             try:
                 df_total = get_excel_table_as_df(file_content, 'TabTotal')
                 df_datas = get_excel_table_as_df(file_content, 'TabDatas')
             except ValueError as e:
-                logging.error(str(e))
-                return func.HttpResponse(str(e), status_code=400)
+                return json_response({"status": "error", "message": str(e), "cmd_id": cmd_title, "type_import": type_import}, 400)
             except Exception as e:
-                logging.error(f"Erreur lors de la lecture de l'Excel : {str(e)}")
-                return func.HttpResponse("Fichier Excel invalide ou corrompu.", status_code=400)
+                return json_response({"status": "error", "message": "Fichier Excel invalide ou corrompu.", "details": str(e), "cmd_id": cmd_title, "type_import": type_import}, 400)
             
-            # Vérification du prix
-            # Note: iloc[0] prend la 1ère ligne de données. On s'assure que la colonne existe.
             total_prix_excel = str(df_total.iloc[0].get('TotalPrix', '')) if not df_total.empty else ""
 
-            # Vérif BDD Config
             clef_config = 'TotalPrixTarifsPresta' if type_import == "Fichier prestation" else 'TotalPrixTarifsGrossiste'
             config_items = graph_filtered_items(site_id, config_list_id, token, f"fields/Clef eq '{clef_config}'")
             total_prix_bdd = config_items[0].get("fields", {}).get("Title", "") if config_items else ""
@@ -220,7 +210,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if bypass != "ok" and total_prix_excel != total_prix_bdd:
                 statut_import = "maj"
 
-            # Nettoyage et préparation des lignes 
             df_datas = df_datas.dropna(subset=['Ligne'])
             for _, row in df_datas.iterrows():
                 ligne_val = str(row.get('Ligne', ''))
@@ -235,7 +224,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 })
 
         elif type_import == "Fichier Finale3D":
-            # --- LECTURE CSV FINALE3D ---
             try:
                 csv_text = file_content.decode('utf-8') 
             except UnicodeDecodeError:
@@ -257,7 +245,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 })
 
         elif type_import == "Fichier pyromotion":
-            # --- LECTURE CSV PYROMOTION ---
             try:
                 csv_text = file_content.decode('utf-8') 
             except UnicodeDecodeError:
@@ -281,7 +268,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         })
 
         elif type_import == "Fichier FWSIM":
-            # --- LECTURE CSV FWSIM ---
             try:
                 csv_text = file_content.decode('utf-8') 
             except UnicodeDecodeError:
@@ -309,10 +295,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 qty = str(row.get(3, "")).strip()
                 col9 = str(row.get(9, "")).strip()
 
-                # --- CONDITION IGNORER "MAT" ---
                 if "MAT" in col9.upper():  
                     continue
-                # -------------------------------
 
                 if col9 == chain_id:
                     titre = col9
@@ -329,9 +313,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     "CMD_ID": cmd_title
                 })
         else:
-            return func.HttpResponse(f"Type import inconnu: {type_import}", status_code=400)
+            return json_response({"status": "error", "message": f"Type import inconnu: {type_import}", "cmd_id": cmd_title}, 400)
 
-        # --- 5. Insertion Massive (Batch Post) ---
+        # --- 5. Insertion Massive ---
         logging.info(f"Création de {len(nouveaux_details)} nouvelles lignes...")
         post_batch = []
         for index, item_payload in enumerate(nouveaux_details):
@@ -348,12 +332,26 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if post_batch:
             graph_execute_batch(token, post_batch)
 
-        # --- 6. Mise à jour de l'élément d'import ---
+        # --- 6. Mise à jour statut ---
         graph_update_field(site_id, import_list_id, item_id, token, {"StatutImport": statut_import})
         
         logging.info("Import terminé avec succès !")
-        return func.HttpResponse(json.dumps({"status": "success", "lignes_creees": len(nouveaux_details)}), mimetype="application/json", status_code=200)
+        
+        # --- RÉPONSE FINALE ENRICHIE ---
+        return json_response({
+            "status": "success", 
+            "cmd_id": cmd_title,
+            "type_import": type_import,
+            "lignes_creees": len(nouveaux_details),
+            "statut_import_maj": statut_import
+        }, 200)
 
     except Exception as e:
         logging.exception("Erreur critique dans la fonction Azure Import")
-        return func.HttpResponse(f"Erreur serveur : {str(e)}", status_code=500)
+        return json_response({
+            "status": "error", 
+            "message": "Erreur interne du serveur lors du traitement.", 
+            "details": str(e),
+            "cmd_id": cmd_title,
+            "type_import": type_import
+        }, 500)
