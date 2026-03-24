@@ -210,15 +210,27 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if bypass != "ok" and total_prix_excel != total_prix_bdd:
                 statut_import = "maj"
 
-            df_datas = df_datas.dropna(subset=['Ligne'])
+            # --- NETTOYAGE ET PRÉPARATION ---
+            # On remplace les "trous" (valeurs nulles/vides de l'Excel) par du texte vide pour éviter les bugs
+            df_datas = df_datas.fillna("")
+            
             for _, row in df_datas.iterrows():
-                ligne_val = str(row.get('Ligne', ''))
+                ligne_val = str(row.get('Ligne', '')).strip()
+                ref_val = str(row.get('Référence', '')).strip()
+                
+                # --- NOUVELLE CONDITION (Comme FWSIM) ---
+                # Si Ligne ET Référence sont vides, c'est une ligne vide de fin de tableau, on l'ignore.
+                if ligne_val == "" and ref_val == "":
+                    continue
+                # ----------------------------------------
+                
+                # Calcul du Titre (Si ça commence par un espace, on prend la 2ème partie)
                 titre = ligne_val.split(' ')[1].strip() if len(ligne_val.split(' ')) > 1 else ligne_val
                 
                 nouveaux_details.append({
                     "Title": titre,
-                    "Reference": str(row.get('Référence', '')),
-                    "Quantite": str(row.get('Quantité', '')),
+                    "Reference": ref_val,
+                    "Quantite": str(row.get('Quantité', '')).strip(),
                     "Statut": "Attente validation",
                     "CMD_ID": cmd_title
                 })
