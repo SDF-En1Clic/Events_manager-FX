@@ -216,7 +216,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 logging.warning(f"Import bloqué pour {cmd_title} : Différence de prix détectée (Excel: {total_prix_excel} vs BDD: {total_prix_bdd})")
                 
                 return json_response({
-                    "status": "success", 
+                    "status": "maj", 
                     "cmd_id": cmd_title,
                     "type_import": type_import,
                     "lignes_creees": 0,
