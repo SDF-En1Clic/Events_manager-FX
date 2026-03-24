@@ -209,7 +209,20 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             if bypass != "ok" and total_prix_excel != total_prix_bdd:
                 statut_import = "maj"
-
+                # 1. On met à jour l'en-tête de la commande à "maj" tout de suite
+                graph_update_field(site_id, import_list_id, item_id, token, {"StatutImport": statut_import})
+                
+                # 2. On STOPPE l'exécution et on renvoie un JSON spécifique à Power Automate
+                logging.warning(f"Import bloqué pour {cmd_title} : Différence de prix détectée (Excel: {total_prix_excel} vs BDD: {total_prix_bdd})")
+                
+                return json_response({
+                    "status": "success", 
+                    "cmd_id": cmd_title,
+                    "type_import": type_import,
+                    "lignes_creees": 0,
+                    "statut_import_maj": statut_import,
+                    "message": "Import suspendu : Différence de prix détectée. Veuillez mettre à jour les tarifs."
+                }, 200)
             # --- NETTOYAGE ET PRÉPARATION ---
             # On remplace les "trous" (valeurs nulles/vides de l'Excel) par du texte vide pour éviter les bugs
             df_datas = df_datas.fillna("")
