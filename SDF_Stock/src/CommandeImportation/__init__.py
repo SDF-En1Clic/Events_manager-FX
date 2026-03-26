@@ -112,7 +112,7 @@ def graph_execute_batch(token, batch_requests):
     return res.json()
 
 # ==============================================================================
-# FONCTION PRINCIPALE
+# FONCTION PRINCIPALE 
 # ==============================================================================
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Début du traitement Import Commande.')
