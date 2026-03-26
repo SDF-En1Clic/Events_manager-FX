@@ -170,6 +170,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         
         cmd_title = import_item.get("fields", {}).get("Title", "Inconnu")
         type_import = import_item.get("fields", {}).get("Type_import")
+        aff_id = import_item.get("fields", {}).get("AFF_ID", "")
 
         if not type_import:
             return json_response({"status": "error", "message": "La colonne 'Type_import' est vide sur la commande.", "cmd_id": cmd_title}, 400)
@@ -340,19 +341,22 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     # Sinon, on prend l'adresse
                     titre = col_address
 
-                payload = {
-                    "Title": titre,
-                    "Reference": ref,
-                    "Quantite": qty,
-                    "Statut": "Attente validation",
-                    "CMD_ID": cmd_title
-                }
-
                 # --- NOUVEAU : On gère le matériel séparément ---
                 if "MAT" in col_address.upper():  
-                    nouveaux_materiels.append(payload)
+                    nouveaux_materiels.append({
+                        "Title": ref,
+                        "Quantite": qty,
+                        "Statut": "Attente validation",
+                        "AFF_ID": str(aff_id)
+                    })
                 else:
-                    nouveaux_details.append(payload)
+                    nouveaux_details.append({
+                        "Title": titre,
+                        "Reference": ref,
+                        "Quantite": qty,
+                        "Statut": "Attente validation",
+                        "CMD_ID": cmd_title
+                    })
         else:
             return json_response({"status": "error", "message": f"Type import inconnu: {type_import}", "cmd_id": cmd_title}, 400)
 
@@ -360,11 +364,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # --- 4.5 VÉRIFICATION MATÉRIEL MANQUANT ---
         if nouveaux_materiels:
             logging.info("Vérification de l'existence des matériels dans la BDD...")
-            unique_mat_refs = set([m["Reference"] for m in nouveaux_materiels])
+            unique_mat_refs = set([m["Title"] for m in nouveaux_materiels])
             missing_refs = []
 
             for mat_ref in unique_mat_refs:
-                # ⚠️ Modifie 'fields/Title' par 'fields/Reference' si ta colonne SP s'appelle autrement
+                
                 check_item = graph_filtered_items(site_id, materiel_list_id, token, f"fields/Title eq '{mat_ref}'")
                 
                 if not check_item:
