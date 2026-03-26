@@ -117,7 +117,7 @@ def graph_execute_batch(token, batch_requests):
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Début du traitement Import Commande.')
     
-    # Variables globales pour le retour d'erreur
+    # Variables globales pour le retour d'erreur 
     cmd_title = "Inconnu"
     type_import = "Inconnu"
 
