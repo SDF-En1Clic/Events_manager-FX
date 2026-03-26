@@ -347,7 +347,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         "Title": ref,
                         "Quantite": qty,
                         "Statut": "Attente validation",
-                        "AFF_ID": str(aff_id)
+                        "Aff_ID": str(aff_id)
                     })
                 else:
                     nouveaux_details.append({
