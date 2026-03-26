@@ -341,7 +341,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     # Sinon, on prend l'adresse
                     titre = col_address
 
-                # --- NOUVEAU : On gère le matériel séparément ---
+                # --- NOUVEAU : On gère le matériel séparémentt ---
                 if "MAT" in col_address.upper():  
                     nouveaux_materiels.append({
                         "Title": ref,
