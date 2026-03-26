@@ -155,6 +155,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         import_list_id = get_secret("importlistid") 
         details_list_id = get_secret("cmddetailslistid") 
         config_list_id = get_secret("configlistid") 
+        materiel_list_id=get_secret("materiellistid")
+        materiel_reservation_list_id=get_secret("materielreservationlistid")
+        
 
         token = get_graph_token(tenant_id, client_id, client_secret)
         if not token:
@@ -190,6 +193,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         statut_import = "oui"
         nouveaux_details = []
+        nouveaux_materiels = [] # <-- NOUVEAU : Initialisation de la liste des matériels
 
         # --- 4. COMMUTATEUR (SWITCH) ---
         if type_import in ["Fichier prestation", "Fichier grossiste"]:
@@ -326,10 +330,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 qty = str(row.get(3, "")).strip()           # 3 = Quantité (D)
                 col_address = str(row.get(9, "")).strip()   # 9 = Address (J)
 
-                # Si la colonne J (Address) contient "MAT", on ignore l'article
-                if "MAT" in col_address.upper():  
-                    continue
-
                 # Traitement du Titre (Variable "Ligne" dans Power Automate)
                 if col_address == chain_id:
                     titre = col_address
@@ -340,18 +340,55 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     # Sinon, on prend l'adresse
                     titre = col_address
 
-                nouveaux_details.append({
+                payload = {
                     "Title": titre,
                     "Reference": ref,
                     "Quantite": qty,
                     "Statut": "Attente validation",
                     "CMD_ID": cmd_title
-                })
+                }
+
+                # --- NOUVEAU : On gère le matériel séparément ---
+                if "MAT" in col_address.upper():  
+                    nouveaux_materiels.append(payload)
+                else:
+                    nouveaux_details.append(payload)
         else:
             return json_response({"status": "error", "message": f"Type import inconnu: {type_import}", "cmd_id": cmd_title}, 400)
 
+
+        # --- 4.5 VÉRIFICATION MATÉRIEL MANQUANT ---
+        if nouveaux_materiels:
+            logging.info("Vérification de l'existence des matériels dans la BDD...")
+            unique_mat_refs = set([m["Reference"] for m in nouveaux_materiels])
+            missing_refs = []
+
+            for mat_ref in unique_mat_refs:
+                # ⚠️ Modifie 'fields/Title' par 'fields/Reference' si ta colonne SP s'appelle autrement
+                check_item = graph_filtered_items(site_id, materiel_list_id, token, f"fields/Title eq '{mat_ref}'")
+                
+                if not check_item:
+                    missing_refs.append(mat_ref)
+
+            if missing_refs:
+                liste_manquants = ", ".join(missing_refs) # On prépare la liste propre (ex: "MAT1, MAT2")
+                msg_erreur = f"Import bloqué : Les matériels suivants sont introuvables dans la base de données : {liste_manquants}"
+                logging.error(msg_erreur)
+                
+                # On renvoie un statut 200 pour que PA continue, avec le statut spécifique
+                return json_response({
+                    "status": "materiel_manquant", 
+                    "message": msg_erreur,
+                    "materiels_manquants": liste_manquants, 
+                    "cmd_id": cmd_title,
+                    "type_import": type_import,
+                    "lignes_creees": 0,
+                    "lignes_materiel_creees": 0
+                }, 200)
+
+
         # --- 5. Insertion Massive ---
-        logging.info(f"Création de {len(nouveaux_details)} nouvelles lignes...")
+        logging.info(f"Création de {len(nouveaux_details)} nouvelles lignes de produits...")
         post_batch = []
         for index, item_payload in enumerate(nouveaux_details):
             post_batch.append({
@@ -367,6 +404,25 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if post_batch:
             graph_execute_batch(token, post_batch)
 
+        # --- NOUVEAU : Insertion Massive Matériel ---
+        if nouveaux_materiels:
+            logging.info(f"Création de {len(nouveaux_materiels)} nouvelles lignes de matériel...")
+            post_batch_mat = []
+            for index, item_payload in enumerate(nouveaux_materiels):
+                post_batch_mat.append({
+                    "id": str(index + 1),
+                    "method": "POST",
+                    "url": f"/sites/{site_id}/lists/{materiel_reservation_list_id}/items",
+                    "body": {"fields": item_payload},
+                    "headers": {"Content-Type": "application/json"}
+                })
+                if len(post_batch_mat) == 20:
+                    graph_execute_batch(token, post_batch_mat)
+                    post_batch_mat = []
+            if post_batch_mat:
+                graph_execute_batch(token, post_batch_mat)
+
+
         # --- 6. Mise à jour statut ---
         graph_update_field(site_id, import_list_id, item_id, token, {"StatutImport": statut_import})
         
@@ -378,6 +434,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "cmd_id": cmd_title,
             "type_import": type_import,
             "lignes_creees": len(nouveaux_details),
+            "lignes_materiel_creees": len(nouveaux_materiels),
             "statut_import_maj": statut_import
         }, 200)
 
