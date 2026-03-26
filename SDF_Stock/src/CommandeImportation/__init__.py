@@ -112,7 +112,7 @@ def graph_execute_batch(token, batch_requests):
     return res.json()
 
 # ==============================================================================
-# FONCTION PRINCIPALE 
+# FONCTION PRINCIPALE  
 # ==============================================================================
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Début du traitement Import Commande.')
@@ -217,7 +217,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 # 1. On met à jour l'en-tête de la commande à "maj" tout de suite
                 graph_update_field(site_id, import_list_id, item_id, token, {"StatutImport": statut_import})
                 
-                # 2. On STOPPE l'exécution et on renvoie un JSON spécifique à Power Automate
+                # 2. On STOPPE l'exécution et on renvoie un JSON spécifique à Power Automate 
                 logging.warning(f"Import bloqué pour {cmd_title} : Différence de prix détectée (Excel: {total_prix_excel} vs BDD: {total_prix_bdd})")
                 
                 return json_response({
