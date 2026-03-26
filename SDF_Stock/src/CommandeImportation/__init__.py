@@ -331,7 +331,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 qty = str(row.get(3, "")).strip()           # 3 = Quantité (D)
                 col_address = str(row.get(9, "")).strip()   # 9 = Address (J)
 
-                # Traitement du Titre (Variable "Ligne" dans Power Automate)
+                # Traitement du Titre (Variable "Ligne" dans Power Automate) 
                 if col_address == chain_id:
                     titre = col_address
                 elif col_address == "" or col_address.lower() == "nan": 
