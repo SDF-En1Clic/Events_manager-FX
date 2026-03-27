@@ -390,6 +390,19 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     "lignes_materiel_creees": 0
                 }, 200)
 
+        # --- NOUVEAU : TRI DES LIGNES AVANT INSERTION ---
+        def tri_intelligent(item):
+            # Tente de convertir en nombre pour que "2" soit avant "10"
+            val = str(item.get("Title", "")).strip()
+            try:
+                return (0, float(val))
+            except ValueError:
+                return (1, val)
+                
+        nouveaux_details.sort(key=tri_intelligent)
+        # On trie aussi le matériel par ordre alphabétique de référence
+        nouveaux_materiels.sort(key=lambda x: str(x.get("Title", "")))
+        # ------------------------------------------------
 
         # --- 5. Insertion Massive ---
         logging.info(f"Création de {len(nouveaux_details)} nouvelles lignes de produits...")
