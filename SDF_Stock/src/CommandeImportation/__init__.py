@@ -347,7 +347,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         "Title": ref,
                         "Quantite": qty,
                         "Statut": "Attente validation",
-                        "Aff_ID": str(aff_id)
+                        "Aff_ID": str(aff_id),
+                        "CMD_ID": str(cmd_title)
                     })
                 else:
                     nouveaux_details.append({
@@ -408,7 +409,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Création de {len(nouveaux_details)} nouvelles lignes de produits...")
         post_batch = []
         for index, item_payload in enumerate(nouveaux_details):
-            logging.info(f"-> [Produit] Ordre prévu : {index + 1} | Titre : {item_payload.get('Title')} | Réf : {item_payload.get('Reference')}")
+            #logging.info(f"-> [Produit] Ordre prévu : {index + 1} | Titre : {item_payload.get('Title')} | Réf : {item_payload.get('Reference')}")
             post_batch.append({
                 "id": str(index + 1),
                 "method": "POST",
@@ -427,7 +428,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             logging.info(f"Création de {len(nouveaux_materiels)} nouvelles lignes de matériel...")
             post_batch_mat = []
             for index, item_payload in enumerate(nouveaux_materiels):
-                logging.info(f"-> [Matériel] Ordre prévu : {index + 1} | Titre : {item_payload.get('Title')}")
+                #logging.info(f"-> [Matériel] Ordre prévu : {index + 1} | Titre : {item_payload.get('Title')}")
                 post_batch_mat.append({
                     "id": str(index + 1),
                     "method": "POST",
