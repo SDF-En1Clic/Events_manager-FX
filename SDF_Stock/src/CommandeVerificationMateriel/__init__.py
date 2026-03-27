@@ -190,7 +190,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         stock_total_map = {}
         for item in stock_items:
             f = item.get("fields", {})
-            ref = f.get("Title") # ⚠️ On suppose que la référence est dans Title
+            ref = f.get("Materiel_ID") 
             qty = parse_float(f.get("Quantite"))
             if ref:
                 stock_total_map[ref] = qty
