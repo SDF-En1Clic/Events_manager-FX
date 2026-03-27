@@ -157,7 +157,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         config_list_id = get_secret("configlistid") 
         materiel_list_id=get_secret("materiellistid")
         materiel_reservation_list_id=get_secret("materielreservationlistid")
-        
+        affaireevtslistid = get_secret("affaireevtslistid") # <-- NOUVEAU
 
         token = get_graph_token(tenant_id, client_id, client_secret)
         if not token:
@@ -171,6 +171,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         cmd_title = import_item.get("fields", {}).get("Title", "Inconnu")
         type_import = import_item.get("fields", {}).get("Type_import")
         aff_id = import_item.get("fields", {}).get("AFF_ID", "")
+
+        # --- NOUVEAU : Récupération de la date de l'événement ---
+        date_evenement = None
+        if aff_id:
+            logging.info(f"Recherche de l'événement (ID={aff_id}) dans affaireevtslistid...")
+            evt_item = graph_get_item_by_id(site_id, affaireevtslistid, aff_id, token)
+            if evt_item:
+                date_evenement = evt_item.get("fields", {}).get("Date_evt")
+            else:
+                logging.warning(f"Aucun événement trouvé pour l'ID {aff_id}")
+        # --------------------------------------------------------
 
         if not type_import:
             return json_response({"status": "error", "message": "La colonne 'Type_import' est vide sur la commande.", "cmd_id": cmd_title}, 400)
@@ -348,7 +359,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         "Quantite": qty,
                         "Statut": "Attente validation",
                         "Aff_ID": str(aff_id),
-                        "CMD_ID": str(cmd_title)
+                        "CMD_ID": str(cmd_title),
+                        "Date_reservation": date_evenement # <-- NOUVEAU
                     })
                 else:
                     nouveaux_details.append({
