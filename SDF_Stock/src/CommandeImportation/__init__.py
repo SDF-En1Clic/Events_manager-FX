@@ -172,7 +172,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         type_import = import_item.get("fields", {}).get("Type_import")
         aff_id = import_item.get("fields", {}).get("AFF_ID", "")
 
-        # --- NOUVEAU : Récupération de la date de l'événement ---
+        
         date_evenement = None
         if aff_id:
             logging.info(f"Recherche de l'événement (ID={aff_id}) dans affaireevtslistid...")
@@ -258,7 +258,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 
                 nouveaux_details.append({
                     "Title": titre,
-                    "Reference": ref_val,
+                    "Reference": ref_val.upper(),
                     "Quantite": str(row.get('Quantité', '')).strip(),
                     "Statut": "Attente validation",
                     "CMD_ID": cmd_title
@@ -277,7 +277,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
                 nouveaux_details.append({
                     "Title": str(row.get(2, "")),
-                    "Reference": ref,
+                    "Reference": ref.upper(),
                     "Description_pyro": str(row.get(1, "")),
                     "Quantite": str(row.get(3, "")),
                     "Comptabilise_inventaire": 0,
@@ -302,7 +302,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     if ref:
                         nouveaux_details.append({
                             "Title": ligne_memoire,
-                            "Reference": ref,
+                            "Reference": ref.upper(),
                             "Quantite": str(row.get(3, "")).strip(),
                             "Statut": "Attente validation",
                             "CMD_ID": cmd_title
@@ -355,17 +355,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 # --- NOUVEAU : On gère le matériel séparémentt ---
                 if "MAT" in col_address.upper():  
                     nouveaux_materiels.append({
-                        "Title": ref,
+                        "Title": ref.upper(),
                         "Quantite": qty,
                         "Statut": "Attente validation",
                         "Aff_ID": str(aff_id),
                         "CMD_ID": str(cmd_title),
-                        "Date_reservation": date_evenement # <-- NOUVEAU
+                        "Date_reservation": date_evenement 
                     })
                 else:
                     nouveaux_details.append({
                         "Title": titre,
-                        "Reference": ref,
+                        "Reference": ref.upper(),
                         "Quantite": qty,
                         "Statut": "Attente validation",
                         "CMD_ID": cmd_title
