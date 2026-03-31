@@ -172,6 +172,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         produits_list_id = get_secret("produitslistid")
         inventaire_list_id = get_secret("inventairelistid")
         arrivages_list_id = get_secret("arrivagesproduitslistid")
+        materiel_reservation_list_id = get_secret("materielreservationlistid") 
 
         # --- Auth
 
@@ -204,7 +205,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # --- Récupération des détails (lignes de commande)
 
         logging.info("Récupération des détails...")
-        details = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq {commande_id}")
+        details = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq '{commande_id}'")
         nb_lignes_commande = len(details)
         logging.info(f"Nombre de lignes : {nb_lignes_commande}")
 
@@ -274,7 +275,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         usage_tracker = {}
         ruptures = []
 
-        # --- BOUCLE
+        # --- BOUCLE PRODUITS
         for detail in details:
             d = detail["fields"]
             reference = d.get("Reference")
@@ -390,9 +391,30 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             # LOGIQUE NON-SDF
             # ------------------------------------------------
             else:
-                logging.info("   ➤ Produit non SDF – Passage en 'Commandé'")
+                logging.info("   ➤ Produit non SDF – Passage en 'Commandé'")
                 graph_update_field(site_id, details_list_id, item_id, token, {"Statut": "Commandé"})
                 continue
+
+        # --- NOUVEAU : LOGIQUE MATÉRIEL ---
+        logging.info("Validation des matériels réservés...")
+        materiels = graph_filtered_items(site_id, materiel_reservation_list_id, token, f"fields/CMD_ID eq '{commande_id}'")
+        
+        for materiel in materiels:
+            d = materiel["fields"]
+            reference_mat = d.get("Title") # Titre contient la référence
+            item_id_mat = materiel["id"]
+            
+            # On lit la quantité dispo calculée par la fonction CommandeVerificationMateriel
+            qte_dispo = parse_float(d.get("qte_dispo"))
+            
+            if qte_dispo > 0:
+                graph_update_field(site_id, materiel_reservation_list_id, item_id_mat, token, {"Statut": "Validé"})
+                logging.info(f"Matériel {reference_mat} validé (Dispo: {qte_dispo})")
+            else:
+                graph_update_field(site_id, materiel_reservation_list_id, item_id_mat, token, {"Statut": "Rupture"})
+                logging.warning(f"Matériel {reference_mat} en Rupture (Dispo: {qte_dispo})")
+                ruptures.append({"reference": reference_mat, "raison": "matériel indisponible à cette date"})
+        # ----------------------------------
 
         # --- MISE A JOUR DU STATUT DE LA COMMANDE
         if not ruptures: 
