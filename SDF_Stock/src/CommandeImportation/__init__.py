@@ -186,7 +186,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if not type_import:
             return json_response({"status": "error", "message": "La colonne 'Type_import' est vide sur la commande.", "cmd_id": cmd_title}, 400)
 
-        # --- 3. Purger les anciens détails ---
+# --- 3. Purger les anciens détails ---
         logging.info(f"Purge des anciens détails pour CMD_ID: {cmd_title}")
         old_items = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq '{cmd_title}'")
         
@@ -202,6 +202,24 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 delete_batch = []
         if delete_batch:
             graph_execute_batch(token, delete_batch)
+
+        # --- NOUVEAU : Purger les anciens matériels ---
+        logging.info(f"Purge des anciens matériels pour CMD_ID: {cmd_title}")
+        old_materiels = graph_filtered_items(site_id, materiel_reservation_list_id, token, f"fields/CMD_ID eq '{cmd_title}'")
+        
+        delete_batch_mat = []
+        for index, item in enumerate(old_materiels):
+            delete_batch_mat.append({
+                "id": str(index + 1),
+                "method": "DELETE",
+                "url": f"/sites/{site_id}/lists/{materiel_reservation_list_id}/items/{item['id']}"
+            })
+            if len(delete_batch_mat) == 20: 
+                graph_execute_batch(token, delete_batch_mat)
+                delete_batch_mat = []
+        if delete_batch_mat:
+            graph_execute_batch(token, delete_batch_mat)
+        # ----------------------------------------------
 
         statut_import = "oui"
         nouveaux_details = []
