@@ -199,7 +199,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if not token:
             return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
 
-        # 1. Infos Commande
+        # 1. Infos Commande 
         commande = graph_get_item_by_id(site_id, commandes_list_id, commande_id, token)
         if not commande:
             return func.HttpResponse("Commande introuvable", status_code=404)
