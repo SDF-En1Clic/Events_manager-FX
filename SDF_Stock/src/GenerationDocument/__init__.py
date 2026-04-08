@@ -507,6 +507,22 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             template_bytes = download_graph_file(site_id, token, template_path)
             file_bytes = fill_excel(template_bytes, header_data, flat_data, grouped_data, is_ukoba)
         
+        # 6.5 Suppression des anciens éléments avec le même nom (nettoyage)
+        try:
+            filter_param = urllib.parse.quote(f"fields/Title eq '{nom_fichier_doc}'", safe="=()/ ")
+            url_check = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{commande_doc_list_id}/items?$expand=fields&$filter={filter_param}"
+            headers_check = {"Authorization": f"Bearer {token}", "Prefer": "HonorNonIndexedQueriesWarningMayFailRandomly"}
+            res_check = session.get(url_check, headers=headers_check)
+            if res_check.ok:
+                for old_item in res_check.json().get("value", []):
+                    old_id = old_item.get("id")
+                    if old_id:
+                        url_del = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{commande_doc_list_id}/items/{old_id}"
+                        session.delete(url_del, headers={"Authorization": f"Bearer {token}"})
+                        logging.info(f"Ancien document SharePoint supprimé: {old_id}")
+        except Exception as e:
+            logging.error(f"Erreur lors de la suppression de l'ancien document: {e}")
+
         # 7. Création de l'élément dans SharePoint (Liste Commande Document)
         new_item_fields = {
             "Title": nom_fichier_doc,
@@ -529,7 +545,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         drive_item_id = drive_item['id']
         
         return func.HttpResponse(
-            json.dumps({"success": True, "created_item_id": item_id, "drive_item_id": drive_item_id, "filename": nom_fichier}),
+            json.dumps({
+                "success": True, 
+                "created_item_id": item_id, 
+                "item_id": item_id,
+                "Type_Doc": type_doc,
+                "drive_item_id": drive_item_id, 
+                "filename": nom_fichier
+            }),
             status_code=200,
             mimetype="application/json"
         )
