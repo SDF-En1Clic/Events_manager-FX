@@ -177,10 +177,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         
         logging.info(f"Paramètre reçus : ID_cmd={commande_id}, Type_Doc={type_doc}")
         if not commande_id or not type_doc:
-            return func.HttpResponse("Paramètres 'ID_cmd' et 'Type_Doc' requis", status_code=400)
+            return func.HttpResponse(json.dumps({"status": "error", "message": "Paramètres 'ID_cmd' et 'Type_Doc' requis"}), status_code=400, mimetype="application/json")
             
         if type_doc not in ["Commande globale", "Commande ukoba", "Plan de tir"]:
-            return func.HttpResponse("Type_Doc non supporté", status_code=400)
+            return func.HttpResponse(json.dumps({"status": "error", "message": f"Type_Doc non supporté: {type_doc}"}), status_code=400, mimetype="application/json")
 
         tenant_id = get_secret("tenantid")
         client_id = get_secret("clientid")
@@ -197,12 +197,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         token = get_graph_token(tenant_id, client_id, client_secret)
         if not token:
-            return func.HttpResponse("Échec de l'authentification Graph", status_code=500)
+            return func.HttpResponse(json.dumps({"status": "error", "message": "Échec de l'authentification Graph"}), status_code=500, mimetype="application/json")
 
         # 1. Infos Commande 
         commande = graph_get_item_by_id(site_id, commandes_list_id, commande_id, token)
         if not commande:
-            return func.HttpResponse("Commande introuvable", status_code=404)
+            return func.HttpResponse(json.dumps({"status": "error", "message": "Commande introuvable"}), status_code=404, mimetype="application/json")
         
         entite = commande.get("Entite", "")
         numero_commande = commande.get("Title", "")
@@ -546,7 +546,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         
         return func.HttpResponse(
             json.dumps({
-                "success": True, 
+                "status": "success",
+                "message": f"Le document {type_doc} a été créé avec succès.",
                 "created_item_id": item_id, 
                 "item_id": item_id,
                 "Type_Doc": type_doc,
@@ -559,4 +560,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         
     except Exception as e:
         logging.exception("Erreur dans GenerationDocument")
-        return func.HttpResponse(f"Erreur serveur : {str(e)}", status_code=500)
+        return func.HttpResponse(
+            json.dumps({"status": "error", "message": f"Erreur serveur interne : {str(e)}"}), 
+            status_code=500, 
+            mimetype="application/json"
+        )
