@@ -4,7 +4,8 @@
     "CommandeValidation",
 	  "CommandeVerification",
 	  "CommandeReception",
-    "CommandeImportation"
+    "CommandeImportation",
+    "CommandeDocument"
   ],
   "logging": {
     "applicationInsights": {
