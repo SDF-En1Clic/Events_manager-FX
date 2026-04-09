@@ -507,12 +507,21 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             template_bytes = download_graph_file(site_id, token, template_path)
             file_bytes = fill_excel(template_bytes, header_data, flat_data, grouped_data, is_ukoba)
         
-        # 6.5 Suppression des anciens éléments avec le même nom (nettoyage)
+        # 6.5 Suppression des anciens éléments (nettoyage par ID_cmd et Type_Doc)
         try:
-            filter_param = urllib.parse.quote(f"fields/Title eq '{nom_fichier_doc}'", safe="=()/ ")
-            url_check = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{commande_doc_list_id}/items?$expand=fields&$filter={filter_param}"
             headers_check = {"Authorization": f"Bearer {token}", "Prefer": "HonorNonIndexedQueriesWarningMayFailRandomly"}
+            
+            # On tente d'abord avec ID_cmd en tant que string
+            filter_param = urllib.parse.quote(f"fields/ID_cmd eq '{commande_id}' and fields/Type_Doc eq '{type_doc}'", safe="=()/ '")
+            url_check = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{commande_doc_list_id}/items?$expand=fields&$filter={filter_param}"
             res_check = session.get(url_check, headers=headers_check)
+            
+            # Fallback si ID_cmd est un number
+            if res_check.status_code == 400:
+                filter_param = urllib.parse.quote(f"fields/ID_cmd eq {commande_id} and fields/Type_Doc eq '{type_doc}'", safe="=()/ '")
+                url_check = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{commande_doc_list_id}/items?$expand=fields&$filter={filter_param}"
+                res_check = session.get(url_check, headers=headers_check)
+
             if res_check.ok:
                 for old_item in res_check.json().get("value", []):
                     old_id = old_item.get("id")
@@ -544,6 +553,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         drive_item = res_upload.json()
         drive_item_id = drive_item['id']
         
+        # Obtenir le listItemId du fichier généré (L'ID "entier" de la bibliothèque reconnu parfois comme File Identifier)
+        file_list_item_id = ""
+        try:
+            url_list_item = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/items/{drive_item_id}?$expand=listItem"
+            res_li = session.get(url_list_item, headers={"Authorization": f"Bearer {token}"})
+            if res_li.ok:
+                file_list_item_id = res_li.json().get("listItem", {}).get("id", "")
+        except Exception as e:
+            logging.warning(f"Impossible de récupérer le listItemId du fichier : {e}")
+        
         return func.HttpResponse(
             json.dumps({
                 "status": "success",
@@ -552,6 +571,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "item_id": item_id,
                 "Type_Doc": type_doc,
                 "drive_item_id": drive_item_id, 
+                "file_list_item_id": file_list_item_id,
                 "filename": nom_fichier
             }),
             status_code=200,
