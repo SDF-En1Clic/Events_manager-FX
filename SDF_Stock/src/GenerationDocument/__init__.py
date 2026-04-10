@@ -321,10 +321,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             # Pour Globale : on trie par Ligne (Tri intelligent avec les nombres en premier)
             def tri_lignes(item):
                 val = str(item.get("Title", "")).replace("Ligne", "").strip()
+                ref = str(item.get("Reference", "")).strip().upper()
                 try:
-                    return (0, float(val))
+                    return (0, float(val), ref)
                 except ValueError:
-                    return (1, val)
+                    return (1, val, ref)
             details.sort(key=tri_lignes)
 
         # Création des deux listes
@@ -368,10 +369,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # --- FONCTION DE TRI PAR LIGNE ---
         def tri_lignes(item):
             val = str(item.get("Title", "")).replace("Ligne", "").strip()
+            ref = str(item.get("Reference", "")).strip().upper()
             try:
-                return (0, float(val))
+                return (0, float(val), ref)
             except ValueError:
-                return (1, val)
+                return (1, val, ref)
 
         flat_data = []
         grouped_data = []
