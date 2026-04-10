@@ -451,11 +451,13 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # --- NOUVEAU : TRI DES LIGNES AVANT INSERTION ---
         def tri_intelligent(item):
             # Tente de convertir en nombre pour que "2" soit avant "10"
+            # Ajout d'un second tri par Référence alphabétique
             val = str(item.get("Title", "")).strip()
+            ref = str(item.get("Reference", "")).strip().upper()
             try:
-                return (0, float(val))
+                return (0, float(val), ref)
             except ValueError:
-                return (1, val)
+                return (1, val, ref)
                 
         nouveaux_details.sort(key=tri_intelligent)
         # On trie aussi le matériel par ordre alphabétique de référence
