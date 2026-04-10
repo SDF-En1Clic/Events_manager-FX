@@ -331,47 +331,74 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 csv_text = file_content.decode('utf-8') 
             except UnicodeDecodeError:
                 csv_text = file_content.decode('latin-1')
-            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str, names=range(15)).fillna("")
+            
+            df_csv = pd.read_csv(io.StringIO(csv_text), sep=';', header=None, dtype=str).fillna("")
+            
+            # --- LECTURE DYNAMIQUE DE L'EN-TÊTE ---
+            en_tete = df_csv.iloc[0].tolist() if not df_csv.empty else []
+            idx_ref, idx_module, idx_pin, idx_chain, idx_address, idx_qty = -1, -1, -1, -1, -1, -1
+            
+            for i, col in enumerate(en_tete):
+                col_lower = str(col).lower()
+                if "produit_id" in col_lower or "reference" in col_lower or "référence" in col_lower:
+                    idx_ref = i
+                elif "module" in col_lower:
+                    idx_module = i
+                elif "pin" in col_lower:
+                    idx_pin = i
+                elif "chain id" in col_lower:
+                    idx_chain = i
+                elif "address" in col_lower:
+                    idx_address = i
+                elif "nr of pieces" in col_lower or "quantit" in col_lower:
+                    idx_qty = i
+                    
+            # Fallback par défaut si les en-têtes ne matchent pas
+            if idx_ref == -1: idx_ref = 1
+            if idx_module == -1: idx_module = 4
+            if idx_pin == -1: idx_pin = 5
+            if idx_qty == -1: idx_qty = 3
+            if idx_chain == -1: idx_chain = 7
+            if idx_address == -1: idx_address = 9
             
             chain_id = ""
             module_v = ""
             pin_v = ""
 
-            for _, row in df_csv.iterrows():
-                # 0 = Time | 1 = Réf
-                col0 = str(row.get(0, "")).strip() 
-                ref = str(row.get(1, "")).strip()
+            for idx, row in df_csv.iterrows():
+                if idx == 0: continue
                 
-                # 1. On ignore SEULEMENT la ligne d'en-tête
-                if "Time" in col0: 
-                    continue
-                    
-                # 2. On ignore les lignes TOTALEMENT vides (fin de fichier)
+                ref = str(row.get(idx_ref, "")).strip()
+                col0 = str(row.get(0, "")).strip()
+                
                 if col0 == "" and ref == "":
                     continue
 
-                # 7 = Chain ID
-                current_chain = str(row.get(7, "")).strip()
-                if current_chain != chain_id and current_chain != "":
+                current_chain = str(row.get(idx_chain, "")).strip()
+                row_module = str(row.get(idx_module, "")).strip()
+                row_pin = str(row.get(idx_pin, "")).strip()
+                
+                if current_chain != "":
                     chain_id = current_chain
-                    module_v = str(row.get(4, "")).strip()  # 4 = Module (E)
-                    pin_v = str(row.get(5, "")).strip()     # 5 = Pin (F)
+                    
+                if row_module != "":
+                    module_v = row_module
+                if row_pin != "":
+                    pin_v = row_pin
 
-                qty = str(row.get(3, "")).strip()           # 3 = Quantité (D)
-                col_address = str(row.get(9, "")).strip()   # 9 = Address (J)
+                qty = str(row.get(idx_qty, "")).strip()
+                col_address = str(row.get(idx_address, "")).strip()
 
                 # Traitement du Titre (Variable "Ligne" dans Power Automate) 
-                if col_address == chain_id:
+                if col_address != "" and col_address.lower() != "nan":
                     titre = col_address
-                elif col_address == "" or col_address.lower() == "nan": 
-                    # Si pas d'adresse, on fait la combinaison Module-Pin
-                    titre = f"{module_v}-{pin_v}"
+                elif chain_id != "":
+                    titre = chain_id
                 else:
-                    # Sinon, on prend l'adresse
-                    titre = col_address
+                    titre = f"{module_v}-{pin_v}"
 
                 # --- NOUVEAU : On gère le matériel séparémentt ---
-                if "MAT" in col_address.upper():  
+                if "MAT" in str(col_address).upper():  
                     nouveaux_materiels.append({
                         "Title": ref.upper(),
                         "Quantite": qty,

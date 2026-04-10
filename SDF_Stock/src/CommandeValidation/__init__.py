@@ -330,8 +330,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     usage_tracker[key_main] = deja_pris + quantite
                     continue 
 
-                # 2. Site Secondaire
-                if site_stock_bis and site_stock_bis != "0":
+                # 2. Site Secondaire (Uniquement si absent du site 1 ou qté inventaire = 0)
+                if q_inv == 0 and site_stock_bis and site_stock_bis != "0":
                     q_inv_bis = sum(
                         parse_float(i["fields"].get("Quantite")) for i in inventaire
                         if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock_bis
