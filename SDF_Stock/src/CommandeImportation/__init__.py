@@ -276,7 +276,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 
                 nouveaux_details.append({
                     "Title": titre,
-                    "Reference": ref_val.upper(),
+                    "Reference": ref_val,
                     "Quantite": str(row.get('Quantité', '')).strip(),
                     "Statut": "Attente validation",
                     "CMD_ID": cmd_title
@@ -295,7 +295,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
                 nouveaux_details.append({
                     "Title": str(row.get(2, "")),
-                    "Reference": ref.upper(),
+                    "Reference": ref,
                     "Description_pyro": str(row.get(1, "")),
                     "Quantite": str(row.get(3, "")),
                     "Comptabilise_inventaire": 0,
@@ -320,7 +320,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     if ref:
                         nouveaux_details.append({
                             "Title": ligne_memoire,
-                            "Reference": ref.upper(),
+                            "Reference": ref,
                             "Quantite": str(row.get(3, "")).strip(),
                             "Statut": "Attente validation",
                             "CMD_ID": cmd_title
@@ -400,7 +400,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 # --- NOUVEAU : On gère le matériel séparémentt ---
                 if "MAT" in str(col_address).upper():  
                     nouveaux_materiels.append({
-                        "Title": ref.upper(),
+                        "Title": ref,
                         "Quantite": qty,
                         "Statut": "Attente validation",
                         "Aff_ID": str(aff_id),
@@ -410,7 +410,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 else:
                     nouveaux_details.append({
                         "Title": titre,
-                        "Reference": ref.upper(),
+                        "Reference": ref,
                         "Quantite": qty,
                         "Statut": "Attente validation",
                         "CMD_ID": cmd_title
