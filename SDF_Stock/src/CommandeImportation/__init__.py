@@ -9,6 +9,7 @@ import pandas as pd
 import openpyxl
 import io
 import base64
+import re
 
 # --------- CONFIG GLOBALE -------------
 VAULT_URL = "https://events-manager-kv.vault.azure.net/"
@@ -321,7 +322,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         nouveaux_details.append({
                             "Title": ligne_memoire,
                             "Reference": ref,
-                            "Quantite": str(row.get(3, "")).strip(),
+                            "Quantite": re.sub(r'[^\d.,]', '', str(row.get(3, ""))),
                             "Statut": "Attente validation",
                             "CMD_ID": cmd_title
                         })
