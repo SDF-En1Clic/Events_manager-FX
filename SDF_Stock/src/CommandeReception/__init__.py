@@ -30,6 +30,7 @@ def graph_get_all(site_id, list_id, token, filter_expr=None):
         url = data.get("@odata.nextLink")
 
     return results
+
 def split_filter_queries(field_name, values, chunk_size=20):
     """
     Génère des filtres $filter par groupes (chunk_size) de valeurs.
@@ -467,14 +468,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         and (l["fields"].get("Site") == site_stock)
                         and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
                     )
-                    
+
+                    # --- CORRECTION : calcul de 'dispo' AVANT le log ---
+                    dispo = q_inv - q_resa
+
                     logging.info("   Produit éligible au contrôle de stock (origine SDF)")
                     logging.info("   Site principal : %s", site_stock)
                     logging.info("   q_inv (stock) site principal : %s", q_inv)
                     logging.info("   q_resa (réservé) site principal : %s", q_resa)
                     logging.info("   dispo = q_inv - q_resa : %s", dispo)
-                    
-                    dispo = q_inv - q_resa
+
                     if dispo >= quantite:
                         graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site_prepa":site_recept, "Batiment_x002d_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
                         continue  # Produit validé dans site principal
@@ -501,13 +504,15 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                             and (l["fields"].get("Site") == site_stock_bis)
                             and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
                         )
-                        
+
+                        # --- CORRECTION : calcul de 'dispo_bis' AVANT le log ---
+                        dispo_bis = q_inv_bis - q_resa_bis
+
                         logging.info("   ➤ Site secondaire : %s", site_stock_bis)
                         logging.info("   ➤ q_inv_bis (stock) : %s", q_inv_bis)
                         logging.info("   ➤ q_resa_bis (réservé) : %s", q_resa_bis)
                         logging.info("   ➤ dispo_bis = q_inv_bis - q_resa_bis : %s", dispo_bis)
-                        
-                        dispo_bis = q_inv_bis - q_resa_bis
+
                         if dispo_bis >= quantite:
                             graph_update_field(site_id, details_list_id, item_id, token, {"Statut_prepa": "Préparé","Statut": "Préparé","Site_prepa":site_recept, "Batiment_x002d_prepa":batiment_recept, "Emplacement_prepa":emplacement_recept})
                             continue  # Produit validé dans site secondaire
@@ -538,5 +543,3 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.exception("Erreur dans la fonction Azure")
         return func.HttpResponse(f"Erreur serveur : {str(e)}", status_code=500)
-
-
