@@ -5,12 +5,18 @@ from azure.keyvault.secrets import SecretClient
 import requests
 import urllib.parse
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import io
 import re
 from copy import copy
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
+
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo("Europe/Paris")
+except Exception:  # tzdata absent
+    LOCAL_TZ = None
 
 # --------- CONFIG GLOBALE -------------
 VAULT_URL = "https://events-manager-kv.vault.azure.net/"
@@ -239,10 +245,26 @@ def clean_id(val):
 
 
 def fmt_date(val):
+    """Formate une date SharePoint (UTC) en jj/mm/aaaa, heure locale Europe/Paris.
+
+    SharePoint renvoie les dates en UTC (ex. '2026-06-17T22:00:00Z' = 18/06 à Paris).
+    On convertit donc en fuseau local avant d'extraire la date, pour éviter le
+    décalage d'un jour.
+    """
     if not val:
         return ""
+    s = str(val)
     try:
-        return datetime.strptime(str(val)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if LOCAL_TZ is not None:
+            dt = dt.astimezone(LOCAL_TZ)
+        return dt.strftime("%d/%m/%Y")
+    except Exception:
+        pass
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
     except Exception:
         return val
 
@@ -401,6 +423,21 @@ def build_grouped_rows(tab_datas_rows):
     return grouped
 
 
+def build_global_rows(fiche_rows, accessoires_rows):
+    """Onglet Global : produits + accessoires (tout sauf UKOBA), groupé par référence."""
+    acc = [{
+        "LIGNE": "",
+        "REFERENCE": a.get("REFERENCE", ""),
+        "DESIGNATION": a.get("DESIGNATION", ""),
+        "QT": a.get("QTE", ""),
+        "ORIGINE": a.get("ORIGINE", ""),
+        "STATUT": a.get("STATUT", ""),
+        "BATIMENT": a.get("BATIMENT", ""),
+        "EMPLACEMENT": a.get("EMPLACEMENT", ""),
+    } for a in accessoires_rows]
+    return build_grouped_rows(fiche_rows + acc)
+
+
 def build_accessoires_rows(details_site, produits_map):
     """Onglet Accessoires : détails dont la référence est un accessoire (non-UKOBA)."""
     rows = []
@@ -476,26 +513,29 @@ def fill_workbook(template_bytes, header_data, fiche_rows, grouped_rows, accesso
         pass
     _strip_external_defined_names(wb)
 
+    # Chaque onglet est cherché par son nom cible (1er) PUIS son ancien nom, pour
+    # fonctionner que le template ait déjà été renommé (Produits/Global) ou non
+    # (Fiche_Prepa/Classés par produit). Le 1er nom est le nom final appliqué.
     layouts = [
-        ("Fiche_Prepa", fiche_rows,
+        (("Produits", "Fiche_Prepa"), fiche_rows,
          ["LIGNE", "REFERENCE", "DESIGNATION", "QT", "ORIGINE", "STATUT", "BATIMENT", "EMPLACEMENT", "CASE"]),
-        ("Classés par produit", grouped_rows,
+        (("Global", "Classés par produit"), grouped_rows,
          ["REFERENCE", "LIGNE", "DESIGNATION", "QT", "ORIGINE", "STATUT", "BATIMENT", "EMPLACEMENT", "CASE"]),
-        ("Accessoires", accessoires_rows,
+        (("Accessoires",), accessoires_rows,
          ["REFERENCE", "DESIGNATION", "ORIGINE", "QTE", "STATUT", "BATIMENT", "EMPLACEMENT", "CASE"]),
-        ("Materiel", materiel_rows,
+        (("Materiel",), materiel_rows,
          ["REFERENCE", "DESIGNATION", "CATEGORIE", "QTE", "STATUT", "BATIMENT", "EMPLACEMENT", "CASE"]),
     ]
-    for name, rows, cols in layouts:
-        ws = find_sheet(wb, name)
+    for names, rows, cols in layouts:
+        ws = None
+        for nm in names:
+            ws = find_sheet(wb, nm)
+            if ws is not None:
+                break
         if ws is not None:
             fill_view_sheet(ws, header_data, rows, cols)
-
-    # Renommage des onglets (après remplissage, qui utilise les noms du template)
-    for old, new in (("Fiche_Prepa", "Produits"), ("Classés par produit", "Global")):
-        ws = find_sheet(wb, old)
-        if ws is not None:
-            ws.title = new
+            if ws.title != names[0]:
+                ws.title = names[0]  # applique le nom final
 
     out = io.BytesIO()
     wb.save(out)
@@ -672,8 +712,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 details_site, produits_map, inventaire_cache,
                 site_id, inventaire_list_id, details_list_id, token,
                 site_filter, is_sec)
-            grouped_rows = build_grouped_rows(fiche_rows)
             accessoires_rows = build_accessoires_rows(details_site, produits_map)
+            # Onglet Global = produits + accessoires (tout sauf UKOBA)
+            grouped_rows = build_global_rows(fiche_rows, accessoires_rows)
             materiel_rows = build_materiel_rows(resa_site, materiel_map)
 
             file_bytes = fill_workbook(template_bytes, header_data, fiche_rows,
