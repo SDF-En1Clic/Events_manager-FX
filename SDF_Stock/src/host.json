@@ -6,7 +6,8 @@
     "CommandeVerificationMateriel",
     "CommandeReception",
     "CommandeImportation",
-    "GenerationDocument"
+    "GenerationDocument",
+    "GenerationFichePrepa"
   ],
   "logging": {
     "applicationInsights": {
