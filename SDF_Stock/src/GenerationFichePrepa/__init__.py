@@ -7,9 +7,10 @@ import urllib.parse
 import json
 from datetime import datetime
 import io
-from openpyxl import load_workbook
-from openpyxl.utils.cell import column_index_from_string, get_column_letter
 import re
+from copy import copy
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 
 # --------- CONFIG GLOBALE -------------
 VAULT_URL = "https://events-manager-kv.vault.azure.net/"
@@ -140,62 +141,90 @@ def graph_patch_item(site_id, list_id, item_id, token, fields_dict):
 # =========================================================================
 #  EXCEL HELPERS
 # =========================================================================
-def append_to_table(sheet, table, data_list):
-    """Ajoute des lignes à une table Excel (DATAS) et étend sa plage."""
-    if not data_list:
-        return
-
-    match = re.search(r'([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)', table.ref)
-    if not match:
-        return
-
-    start_col, start_row, end_col, end_row = match.groups()
-    start_row = int(start_row)
-    start_col_idx = column_index_from_string(start_col)
-    end_col_idx = column_index_from_string(end_col)
-
-    headers = []
-    for col_idx in range(start_col_idx, end_col_idx + 1):
-        headers.append(sheet.cell(row=start_row, column=col_idx).value)
-
-    current_row = start_row
-    for row_data in data_list:
-        current_row += 1
-        for col_idx, header in enumerate(headers, start=start_col_idx):
-            sheet.cell(row=current_row, column=col_idx, value=row_data.get(header, ""))
-
-    table.ref = f"{start_col}{start_row}:{end_col}{current_row}"
+# Cellules d'en-tête (rows 1-11), identiques sur les 4 onglets de vue.
+HEADER_CELLS = {
+    "A2": "Emetteur", "E2": "Destinataire",
+    "B3": "Commande N°", "E3": "CREATEUR",
+    "B4": "Client",
+    "B6": "Adresse Livraison", "B7": "Ville Livraison",
+    "B8": "Site de livraison", "B9": "Telephone",
+    "B10": "Date de livraison", "B11": "Date de tir",
+}
+HEADER_ROW = 12  # ligne des libellés de colonnes ; les données commencent en 13
 
 
-def write_sheet_rows(ws, header_row, col_order, data_list):
-    """Écrit des valeurs statiques dans un onglet de vue (Materiel / Accessoires).
+def fill_view_sheet(ws, header_data, data_rows, col_keys):
+    """Remplit un onglet de vue en VALEURS STATIQUES (en-tête + données).
 
-    Les formules de "spill" déjà présentes sous l'en-tête sont écrasées par les
-    valeurs ; les lignes excédentaires éventuelles sont nettoyées.
+    On écrase toutes les formules matricielles du template (en-tête + zone de
+    données) : Excel n'a donc plus de tableau dynamique « spill » à réparer à
+    l'ouverture, et le contenu est entièrement maîtrisé.
     """
-    first_data_row = header_row + 1
-    # On nettoie toute la bande de colonnes (des formules "spill" du template
-    # subsistent au-delà des colonnes d'en-tête, ex. colonne CASE).
-    n_cols = max(len(col_order), ws.max_column)
-    rows_to_clear = max(len(data_list), ws.max_row - header_row)
+    # En-tête
+    for cell, key in HEADER_CELLS.items():
+        ws[cell] = header_data.get(key, "")
+
+    # Données (à partir de la ligne 13). On réplique le style de la ligne modèle
+    # (1ʳᵉ ligne de données du template) sur toutes les lignes écrites pour un
+    # rendu homogène, et on remet à « Normal » les lignes vides.
+    first = HEADER_ROW + 1
+    n_cols = max(len(col_keys), ws.max_column)
+    model_styles = [copy(ws.cell(row=first, column=c)._style) for c in range(1, n_cols + 1)]
+    model_height = ws.row_dimensions[first].height
+
+    rows_to_clear = max(len(data_rows), ws.max_row - HEADER_ROW)
     for i in range(rows_to_clear):
-        r = first_data_row + i
-        values = data_list[i] if i < len(data_list) else None
-        for c_idx in range(1, n_cols + 1):
-            key = col_order[c_idx - 1] if c_idx <= len(col_order) else None
-            if values is not None and key is not None:
-                ws.cell(row=r, column=c_idx).value = values.get(key, "")
+        r = first + i
+        values = data_rows[i] if i < len(data_rows) else None
+        has_data = values is not None
+        for c in range(1, n_cols + 1):
+            key = col_keys[c - 1] if c <= len(col_keys) else None
+            cell = ws.cell(row=r, column=c)
+            cell.value = values.get(key, "") if (has_data and key is not None) else None
+            if has_data:
+                cell._style = copy(model_styles[c - 1])
+                # Alignement : REFERENCE à gauche, tout le reste centré
+                al = cell.alignment
+                horiz = "left" if key == "REFERENCE" else "center"
+                cell.alignment = Alignment(horizontal=horiz, vertical=al.vertical or "center",
+                                           wrap_text=al.wrap_text)
             else:
-                ws.cell(row=r, column=c_idx).value = None
+                cell.style = "Normal"
+        ws.row_dimensions[r].height = model_height if has_data else None
 
 
-def get_tables(wb):
-    """Retourne un dict {nom_table: (table, sheet)} pour toutes les tables du classeur."""
-    found = {}
-    for sheet in wb.worksheets:
-        for name in list(sheet.tables):
-            found[name] = (sheet.tables[name], sheet)
-    return found
+_EXTERNAL_REF = re.compile(r'\[\d+\]')
+
+
+def _strip_external_defined_names(wb):
+    """Supprime les noms définis qui référencent un classeur externe ([n]…) ou #REF.
+
+    (Hérités du .xlsm source ; ils deviennent invalides une fois le lien externe
+    retiré et provoquent la « réparation » d'Excel à l'ouverture.)
+    """
+    def _drop(container):
+        try:
+            for nm in list(container):
+                val = getattr(container[nm], "value", "") or ""
+                if _EXTERNAL_REF.search(val) or "#REF" in val:
+                    del container[nm]
+        except Exception as e:
+            logging.warning(f"Nettoyage noms définis: {e}")
+
+    _drop(wb.defined_names)
+    for ws in wb.worksheets:
+        _drop(ws.defined_names)
+
+
+def find_sheet(wb, name):
+    """Retrouve une feuille par nom exact, sinon par préfixe (accents/encodage)."""
+    if name in wb.sheetnames:
+        return wb[name]
+    pref = name[:5].lower()
+    for ws in wb.worksheets:
+        if ws.title.lower().startswith(pref):
+            return ws
+    return None
 
 
 # =========================================================================
@@ -252,24 +281,45 @@ def tri_lignes(item):
         return (1, val, str(item.get("Reference", "")).strip().upper())
 
 
+def ligne_num(r):
+    """Clé de tri numérique sur le numéro de ligne ('Ligne 12' -> 12)."""
+    val = str(r.get("LIGNE", "")).replace("Ligne", "").strip()
+    try:
+        return (0, float(val))
+    except ValueError:
+        return (1, val)
+
+
+def is_accessoire(prod):
+    """Un accessoire = Famille_FWSIM == 'ACCESSOIRE' ET Sous_famille_FWSIM != 'UKOBA'.
+
+    (Logique PowerApps : ces lignes vont dans l'onglet Accessoires ; tout le reste,
+    y compris les accessoires de sous-famille UKOBA, va dans Fiche_Prepa.)
+    """
+    fam = str(prod.get("Famille_FWSIM", "")).strip().upper()
+    sous = str(prod.get("Sous_famille_FWSIM", "")).strip().upper()
+    return fam == "ACCESSOIRE" and sous != "UKOBA"
+
+
 # =========================================================================
 #  CONSTRUCTION DES DONNÉES D'UN FICHIER (pour un site de stock)
 # =========================================================================
-def build_fiche_prepa_rows(details_site, produits_sdf_map, inventaire_cache,
+def build_fiche_prepa_rows(details_site, produits_map, inventaire_cache,
                            site_id, inventaire_list_id, details_list_id, token,
                            site_filter, is_secondary):
-    """Construit les lignes de l'onglet principal (tabDatas) pour un site de stock
+    """Construit les lignes de l'onglet Fiche_Prepa pour un site de stock
     et applique le PatchItem sur la liste Commandes_details.
 
-    inventaire_cache : dict {(ref, scope): {"bat":, "empl":}} pour éviter les requêtes répétées.
-    site_filter : valeur de Site_Stock_second utilisée pour cibler l'inventaire.
+    Contenu = tous les produits NON-accessoires (les accessoires non-UKOBA vont
+    dans l'onglet Accessoires). inventaire_cache : {(ref, scope): {...}} pour
+    éviter les requêtes répétées. site_filter : valeur de Site_Stock_second.
     """
     rows = []
     for det in details_site:
         ref = str(det.get("Reference", "")).strip().upper()
-        prod = produits_sdf_map.get(ref)
-        # Onglet principal = uniquement les produits d'origine SDF (filtre du flux)
-        if not prod:
+        prod = produits_map.get(ref, {})
+        # Onglet principal = tout sauf les accessoires (non-UKOBA)
+        if is_accessoire(prod):
             continue
 
         # --- Emplacement / Bâtiment depuis l'inventaire ---
@@ -291,11 +341,12 @@ def build_fiche_prepa_rows(details_site, produits_sdf_map, inventaire_cache,
 
         inv = inventaire_cache[cache_key]
         bat_prefix = "P" if det.get("Emplacement") else ""
+        designation = prod.get("Description_pyromotion", "") or det.get("Description_pyro", "")
 
         rows.append({
             "LIGNE": f"Ligne {det.get('Title', '')}",
             "REFERENCE": ref,
-            "DESIGNATION": prod.get("Description_pyromotion", ""),
+            "DESIGNATION": designation,
             "QT": fmt_qte(det.get("Quantite", "")),
             "COMMENTAIRE": det.get("Commentaires", ""),
             "SITE": det.get("Site", ""),
@@ -303,53 +354,57 @@ def build_fiche_prepa_rows(details_site, produits_sdf_map, inventaire_cache,
             "STATUT": det.get("Statut", ""),
             "ORIGINE": prod.get("Origine", ""),
             "BATIMENT": inv["bat"],
-            "CASE": "" if is_secondary else "☐",
+            "CASE": "☐",
         })
 
         # --- PatchItem -> Commandes_details (PAS l'inventaire) ---
+        # Uniquement si l'inventaire a renvoyé un emplacement/bâtiment, pour ne
+        # pas écraser des données existantes par du vide.
         det_id = det.get("_item_id") or det.get("ID") or det.get("id")
-        if det_id:
+        if det_id and (inv["empl"] or inv["bat"]):
             graph_patch_item(site_id, details_list_id, det_id, token, {
                 "Emplacement": inv["empl"],
                 "Batiment": inv["bat"],
                 "Comptabilise_inventaire": 0,
             })
 
-    # --- Script 1 : tri BATIMENT, EMPLACEMENT, REFERENCE ---
-    rows.sort(key=lambda r: (str(r.get("BATIMENT", "")), str(r.get("EMPLACEMENT", "")), str(r.get("REFERENCE", ""))))
+    # Onglet Fiche_Prepa : trié par numéro de ligne
+    rows.sort(key=ligne_num)
     return rows
 
 
 def build_grouped_rows(tab_datas_rows):
-    """Script 2 : regroupe tabDatas par REFERENCE -> lignes de tabout (onglet Classés par produit)."""
+    """Onglet Classés par produit : trié par RÉFÉRENCE puis groupé par RÉFÉRENCE
+    (en-tête de groupe + lignes enfants triées par ligne)."""
+    rows_sorted = sorted(tab_datas_rows, key=lambda r: (str(r.get("REFERENCE", "")), ligne_num(r)))
     grouped = []
     prev_ref = None
-    for r in tab_datas_rows:
+    for r in rows_sorted:
         cur_ref = r.get("REFERENCE", "")
         if cur_ref != prev_ref:
-            grouped.append({"REFERENCE": cur_ref})  # ligne d'en-tête de groupe
+            grouped.append({"REFERENCE": cur_ref})  # ligne d'en-tête de groupe (pas de case)
         grouped.append({
             "LIGNE": r.get("LIGNE", ""),
             "REFERENCE": "",
             "DESIGNATION": r.get("DESIGNATION", ""),
             "QT": r.get("QT", ""),
-            "SITE": r.get("COMMENTAIRE", ""),  # mapping fidèle au script d'origine
             "EMPLACEMENT": r.get("EMPLACEMENT", ""),
             "STATUT": r.get("STATUT", ""),
             "ORIGINE": r.get("ORIGINE", ""),
             "BATIMENT": r.get("BATIMENT", ""),
+            "CASE": "☐",
         })
         prev_ref = cur_ref
     return grouped
 
 
-def build_accessoires_rows(details_site, accessoires_map):
-    """Onglet Accessoires : détails de la commande dont la référence est un accessoire."""
+def build_accessoires_rows(details_site, produits_map):
+    """Onglet Accessoires : détails dont la référence est un accessoire (non-UKOBA)."""
     rows = []
     for det in details_site:
         ref = str(det.get("Reference", "")).strip().upper()
-        prod = accessoires_map.get(ref)
-        if not prod:
+        prod = produits_map.get(ref, {})
+        if not is_accessoire(prod):
             continue
         if not prod.get("Description_pyromotion"):
             continue
@@ -361,6 +416,7 @@ def build_accessoires_rows(details_site, accessoires_map):
             "STATUT": det.get("Statut", ""),
             "BATIMENT": det.get("Batiment", ""),
             "EMPLACEMENT": det.get("Emplacement", ""),
+            "CASE": "☐",
         })
     rows.sort(key=lambda r: str(r.get("REFERENCE", "")))
     return rows
@@ -386,39 +442,48 @@ def build_materiel_rows(reservations_site, materiel_map):
             "STATUT": resa.get("Statut", "") or mat.get("Statut", ""),
             "BATIMENT": resa.get("Batiment", "") or mat.get("Batiment", ""),
             "EMPLACEMENT": resa.get("Emplacement", "") or mat.get("Emplacement", ""),
+            "CASE": "☐",
         })
     rows.sort(key=lambda r: str(r.get("REFERENCE", "")))
     return rows
 
 
 def fill_workbook(template_bytes, header_data, fiche_rows, grouped_rows, accessoires_rows, materiel_rows):
-    """Remplit toutes les feuilles du template pour un fichier (un site de stock)."""
+    """Remplit les 4 onglets de vue en valeurs statiques (un fichier = un site de stock).
+
+    Aucune formule conservée : pas de tableau dynamique « spill » que Excel
+    devrait réparer à l'ouverture. L'ordre des colonnes suit les libellés des
+    onglets du template.
+    """
     wb = load_workbook(io.BytesIO(template_bytes))
-    tables = get_tables(wb)
 
-    # En-tête (tabDataL) + lignes produits (tabDatas) + regroupement (tabout)
-    if "tabDataL" in tables:
-        tb, sh = tables["tabDataL"]
-        append_to_table(sh, tb, [header_data])
-    if "tabDatas" in tables:
-        tb, sh = tables["tabDatas"]
-        append_to_table(sh, tb, fiche_rows)
-    if "tabout" in tables:
-        tb, sh = tables["tabout"]
-        append_to_table(sh, tb, grouped_rows)
+    # Nettoyage des éléments inutiles à une sortie statique et sources d'erreurs
+    # de « réparation » à l'ouverture Excel : tables, liens externes (le template
+    # hérite d'un lien vers un classeur local), métadonnées de tableaux dynamiques,
+    # et les noms définis qui pointaient vers ce classeur externe (sinon #REF).
+    for ws in wb.worksheets:
+        for tname in list(ws.tables):
+            del ws.tables[tname]
+    try:
+        wb._external_links = []
+    except Exception:
+        pass
+    _strip_external_defined_names(wb)
 
-    # Onglets Accessoires / Materiel : valeurs statiques (les formules de spill du
-    # template pointent toutes vers tabDatas et sont incorrectes -> on les écrase).
-    if "Accessoires" in wb.sheetnames:
-        write_sheet_rows(
-            wb["Accessoires"], 12,
-            ["REFERENCE", "DESIGNATION", "ORIGINE", "QTE", "STATUT", "BATIMENT", "EMPLACEMENT"],
-            accessoires_rows)
-    if "Materiel" in wb.sheetnames:
-        write_sheet_rows(
-            wb["Materiel"], 12,
-            ["REFERENCE", "DESIGNATION", "CATEGORIE", "QTE", "STATUT", "BATIMENT", "EMPLACEMENT"],
-            materiel_rows)
+    layouts = [
+        ("Fiche_Prepa", fiche_rows,
+         ["LIGNE", "REFERENCE", "DESIGNATION", "QT", "ORIGINE", "STATUT", "BATIMENT", "EMPLACEMENT", "CASE"]),
+        ("Classés par produit", grouped_rows,
+         ["REFERENCE", "LIGNE", "DESIGNATION", "QT", "ORIGINE", "STATUT", "BATIMENT", "EMPLACEMENT", "CASE"]),
+        ("Accessoires", accessoires_rows,
+         ["REFERENCE", "DESIGNATION", "ORIGINE", "QTE", "STATUT", "BATIMENT", "EMPLACEMENT", "CASE"]),
+        ("Materiel", materiel_rows,
+         ["REFERENCE", "DESIGNATION", "CATEGORIE", "QTE", "STATUT", "BATIMENT", "EMPLACEMENT", "CASE"]),
+    ]
+    for name, rows, cols in layouts:
+        ws = find_sheet(wb, name)
+        if ws is not None:
+            fill_view_sheet(ws, header_data, rows, cols)
 
     out = io.BytesIO()
     wb.save(out)
@@ -519,22 +584,13 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         details = fetch_details(site_id, details_list_id, token, commande_id)
         logging.info(f"{len(details)} lignes de détail trouvées.")
 
-        # --- 6. Produits : map SDF (onglet principal) + map accessoires ---
-        produits_sdf = graph_filtered_items(site_id, produits_list_id, token, "fields/Origine eq 'SDF'")
-        produits_sdf_map = {}
-        for p in produits_sdf:
+        # --- 6. Produits : une seule map (par Title = Produit_ID), 1ère occurrence ---
+        produits = graph_filtered_items(site_id, produits_list_id, token)
+        produits_map = {}
+        for p in produits:
             key = str(p.get("Title", "")).strip().upper()
-            if key:
-                produits_sdf_map[key] = p
-
-        accessoires = graph_filtered_items(site_id, produits_list_id, token, "fields/Famille_FWSIM eq 'ACCESSOIRE'")
-        accessoires_map = {}
-        for p in accessoires:
-            if str(p.get("Sous_famille_FWSIM", "")).strip().upper() == "UKOBA":
-                continue
-            key = str(p.get("Title", "")).strip().upper()
-            if key:
-                accessoires_map[key] = p
+            if key and key not in produits_map:
+                produits_map[key] = p
 
         # --- 7. Matériel : réservations (par Aff_ID) + liste matériel (par Materiel_ID) ---
         reservations = []
@@ -601,11 +657,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             }
 
             fiche_rows = build_fiche_prepa_rows(
-                details_site, produits_sdf_map, inventaire_cache,
+                details_site, produits_map, inventaire_cache,
                 site_id, inventaire_list_id, details_list_id, token,
                 site_filter, is_sec)
             grouped_rows = build_grouped_rows(fiche_rows)
-            accessoires_rows = build_accessoires_rows(details_site, accessoires_map)
+            accessoires_rows = build_accessoires_rows(details_site, produits_map)
             materiel_rows = build_materiel_rows(resa_site, materiel_map)
 
             file_bytes = fill_workbook(template_bytes, header_data, fiche_rows,
