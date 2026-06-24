@@ -14,8 +14,7 @@ import re
 # --------- CONFIG GLOBALE -------------
 VAULT_URL = "https://events-manager-kv.vault.azure.net/"
 TEMPLATE_PATH = "00 - Templates/Template_fiche_prepa_V1.xlsx"
-SP_HOST = "https://o365soirsdefetes.sharepoint.com"
-SP_SITE_URL = f"{SP_HOST}/sites/Events_manager-Database"
+TARGET_FOLDER = "03 - Documents commandes"
 TYPE_DOC = "Fiche préparation"
 # --------------------------------------
 
@@ -49,78 +48,6 @@ def get_graph_token(tenant_id, client_id, client_secret):
     except Exception as e:
         logging.error(f"Erreur token: {e}")
         return None
-
-
-def get_sp_token(tenant_id, client_id, client_secret, sp_user, sp_pass):
-    """Token DÉLÉGUÉ scopé SharePoint via le compte de service (ROPC).
-
-    SharePoint Online refuse les tokens app-only obtenus avec un client secret ;
-    on passe donc par le compte de service (spusername/sppassword), comme le
-    connecteur SharePoint de l'automate.
-    """
-    if not sp_user or not sp_pass:
-        logging.error("spusername/sppassword absents : impossible d'obtenir un token SharePoint.")
-        return None
-    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-    data = {
-        "grant_type": "password",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "username": sp_user,
-        "password": sp_pass,
-        "scope": f"{SP_HOST}/.default",
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    try:
-        response = session.post(url, data=data, headers=headers)
-        if not response.ok:
-            logging.error(f"Erreur token SharePoint ({response.status_code}): {response.text}")
-        response.raise_for_status()
-        return response.json().get("access_token")
-    except Exception as e:
-        logging.error(f"Exception token SharePoint: {e}")
-        return None
-
-
-def get_form_digest(sp_token):
-    """Récupère un X-RequestDigest pour les écritures REST SharePoint."""
-    url = f"{SP_SITE_URL}/_api/contextinfo"
-    headers = {"Authorization": f"Bearer {sp_token}", "Accept": "application/json;odata=verbose"}
-    try:
-        res = session.post(url, headers=headers)
-        if res.ok:
-            return res.json()["d"]["GetContextWebInformation"]["FormDigestValue"]
-        logging.warning(f"contextinfo indisponible ({res.status_code}): {res.text}")
-    except Exception as e:
-        logging.warning(f"Exception contextinfo: {e}")
-    return None
-
-
-def add_attachment(sp_token, digest, list_id, item_id, filename, file_bytes):
-    """Ajoute le fichier en pièce jointe d'un élément de liste (comme l'automate).
-
-    Utilise l'API REST SharePoint car Microsoft Graph ne gère pas les pièces
-    jointes des éléments de liste. Retourne (ok: bool, detail: str).
-    """
-    safe_name = filename.replace("'", "''")
-    url = (f"{SP_SITE_URL}/_api/web/lists(guid'{list_id}')/items({item_id})"
-           f"/AttachmentFiles/add(FileName='{urllib.parse.quote(safe_name)}')")
-    headers = {
-        "Authorization": f"Bearer {sp_token}",
-        "Accept": "application/json;odata=verbose",
-        "Content-Type": "application/octet-stream",
-    }
-    if digest:
-        headers["X-RequestDigest"] = digest
-    try:
-        res = session.post(url, headers=headers, data=file_bytes)
-        if not res.ok:
-            logging.error(f"Erreur ajout pièce jointe ({res.status_code}): {res.text}")
-            return False, f"{res.status_code}: {res.text[:300]}"
-        return True, "ok"
-    except Exception as e:
-        logging.error(f"Exception ajout pièce jointe: {e}")
-        return False, str(e)
 
 
 def graph_filtered_items(site_id, list_id, token, filter_expr=None):
@@ -534,14 +461,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if not token:
             return _err("Échec de l'authentification Graph", 500)
 
-        # Token SharePoint DÉLÉGUÉ (compte de service) pour les pièces jointes
-        sp_user = get_secret("spusername")
-        sp_pass = get_secret("sppassword")
-        sp_token = get_sp_token(tenant_id, client_id, client_secret, sp_user, sp_pass)
-        sp_digest = get_form_digest(sp_token) if sp_token else None
-        if not sp_token:
-            logging.warning("Token SharePoint indisponible : les pièces jointes seront ignorées.")
-
         # --- 1. Commande ---
         commande = graph_get_item_by_id(site_id, commandes_list_id, commande_id, token)
         if not commande:
@@ -706,19 +625,15 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "Type_Doc": type_doc,
             })
 
-            # Pièce jointe sur l'élément de liste (comme l'automate)
-            attached = False
-            attach_detail = "token SharePoint indisponible" if not sp_token else "élément non créé"
-            if sp_token and item_id:
-                attached, attach_detail = add_attachment(
-                    sp_token, sp_digest, commande_doc_list_id, item_id, nom_fichier, file_bytes)
+            # Upload du fichier dans la bibliothèque (comme GenerationDocument)
+            drive_item_id, file_list_item_id = upload_file(site_id, token, nom_fichier, file_bytes)
 
             generated.append({
                 "site_stock": dest_name,
                 "filename": nom_fichier,
                 "created_item_id": item_id,
-                "attached": attached,
-                "attach_detail": attach_detail,
+                "drive_item_id": drive_item_id,
+                "file_list_item_id": file_list_item_id,
                 "nb_lignes": len(fiche_rows),
                 "nb_accessoires": len(accessoires_rows),
                 "nb_materiel": len(materiel_rows),
@@ -782,3 +697,25 @@ def cleanup_old_docs(site_id, list_id, token, commande_id, type_doc):
                 break
     except Exception as e:
         logging.error(f"Erreur nettoyage anciens documents: {e}")
+
+
+def upload_file(site_id, token, nom_fichier, file_bytes):
+    """Upload le fichier généré dans la bibliothèque (même approche que GenerationDocument)."""
+    url = (f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/"
+           f"{TARGET_FOLDER}/{urllib.parse.quote(nom_fichier, safe='')}:/content")
+    res = session.put(url, headers={"Authorization": f"Bearer {token}",
+                                    "Content-Type": "application/octet-stream"}, data=file_bytes)
+    res.raise_for_status()
+    drive_item = res.json()
+    drive_item_id = drive_item["id"]
+
+    file_list_item_id = ""
+    try:
+        url_li = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/items/{drive_item_id}?$expand=listItem"
+        res_li = session.get(url_li, headers={"Authorization": f"Bearer {token}"})
+        if res_li.ok:
+            file_list_item_id = res_li.json().get("listItem", {}).get("id", "")
+    except Exception as e:
+        logging.warning(f"Impossible de récupérer le listItemId: {e}")
+
+    return drive_item_id, file_list_item_id
