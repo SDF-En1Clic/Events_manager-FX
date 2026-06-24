@@ -318,6 +318,9 @@ def build_fiche_prepa_rows(details_site, produits_map, inventaire_cache,
     for det in details_site:
         ref = str(det.get("Reference", "")).strip().upper()
         prod = produits_map.get(ref, {})
+        # On ne garde que les produits dont l'origine n'est pas UKOBA
+        if str(prod.get("Origine", "")).strip().upper() == "UKOBA":
+            continue
         # Onglet principal = tout sauf les accessoires (non-UKOBA)
         if is_accessoire(prod):
             continue
@@ -404,6 +407,9 @@ def build_accessoires_rows(details_site, produits_map):
     for det in details_site:
         ref = str(det.get("Reference", "")).strip().upper()
         prod = produits_map.get(ref, {})
+        # On ne garde que les produits dont l'origine n'est pas UKOBA
+        if str(prod.get("Origine", "")).strip().upper() == "UKOBA":
+            continue
         if not is_accessoire(prod):
             continue
         if not prod.get("Description_pyromotion"):
@@ -484,6 +490,12 @@ def fill_workbook(template_bytes, header_data, fiche_rows, grouped_rows, accesso
         ws = find_sheet(wb, name)
         if ws is not None:
             fill_view_sheet(ws, header_data, rows, cols)
+
+    # Renommage des onglets (après remplissage, qui utilise les noms du template)
+    for old, new in (("Fiche_Prepa", "Produits"), ("Classés par produit", "Global")):
+        ws = find_sheet(wb, old)
+        if ws is not None:
+            ws.title = new
 
     out = io.BytesIO()
     wb.save(out)
