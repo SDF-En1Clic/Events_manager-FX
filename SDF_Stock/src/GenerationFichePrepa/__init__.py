@@ -51,30 +51,56 @@ def get_graph_token(tenant_id, client_id, client_secret):
         return None
 
 
-def get_sp_token(tenant_id, client_id, client_secret):
-    """Token applicatif scopé SharePoint (pour l'API REST AttachmentFiles)."""
+def get_sp_token(tenant_id, client_id, client_secret, sp_user, sp_pass):
+    """Token DÉLÉGUÉ scopé SharePoint via le compte de service (ROPC).
+
+    SharePoint Online refuse les tokens app-only obtenus avec un client secret ;
+    on passe donc par le compte de service (spusername/sppassword), comme le
+    connecteur SharePoint de l'automate.
+    """
+    if not sp_user or not sp_pass:
+        logging.error("spusername/sppassword absents : impossible d'obtenir un token SharePoint.")
+        return None
     url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     data = {
-        "grant_type": "client_credentials",
+        "grant_type": "password",
         "client_id": client_id,
         "client_secret": client_secret,
-        "scope": f"{SP_HOST}/.default"
+        "username": sp_user,
+        "password": sp_pass,
+        "scope": f"{SP_HOST}/.default",
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
         response = session.post(url, data=data, headers=headers)
+        if not response.ok:
+            logging.error(f"Erreur token SharePoint ({response.status_code}): {response.text}")
         response.raise_for_status()
         return response.json().get("access_token")
     except Exception as e:
-        logging.error(f"Erreur token SharePoint: {e}")
+        logging.error(f"Exception token SharePoint: {e}")
         return None
 
 
-def add_attachment(sp_token, list_id, item_id, filename, file_bytes):
+def get_form_digest(sp_token):
+    """Récupère un X-RequestDigest pour les écritures REST SharePoint."""
+    url = f"{SP_SITE_URL}/_api/contextinfo"
+    headers = {"Authorization": f"Bearer {sp_token}", "Accept": "application/json;odata=verbose"}
+    try:
+        res = session.post(url, headers=headers)
+        if res.ok:
+            return res.json()["d"]["GetContextWebInformation"]["FormDigestValue"]
+        logging.warning(f"contextinfo indisponible ({res.status_code}): {res.text}")
+    except Exception as e:
+        logging.warning(f"Exception contextinfo: {e}")
+    return None
+
+
+def add_attachment(sp_token, digest, list_id, item_id, filename, file_bytes):
     """Ajoute le fichier en pièce jointe d'un élément de liste (comme l'automate).
 
     Utilise l'API REST SharePoint car Microsoft Graph ne gère pas les pièces
-    jointes des éléments de liste.
+    jointes des éléments de liste. Retourne (ok: bool, detail: str).
     """
     safe_name = filename.replace("'", "''")
     url = (f"{SP_SITE_URL}/_api/web/lists(guid'{list_id}')/items({item_id})"
@@ -84,14 +110,17 @@ def add_attachment(sp_token, list_id, item_id, filename, file_bytes):
         "Accept": "application/json;odata=verbose",
         "Content-Type": "application/octet-stream",
     }
+    if digest:
+        headers["X-RequestDigest"] = digest
     try:
         res = session.post(url, headers=headers, data=file_bytes)
         if not res.ok:
             logging.error(f"Erreur ajout pièce jointe ({res.status_code}): {res.text}")
-        return res.ok
+            return False, f"{res.status_code}: {res.text[:300]}"
+        return True, "ok"
     except Exception as e:
         logging.error(f"Exception ajout pièce jointe: {e}")
-        return False
+        return False, str(e)
 
 
 def graph_filtered_items(site_id, list_id, token, filter_expr=None):
@@ -505,8 +534,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if not token:
             return _err("Échec de l'authentification Graph", 500)
 
-        # Token SharePoint (pour attacher les fichiers aux éléments de liste)
-        sp_token = get_sp_token(tenant_id, client_id, client_secret)
+        # Token SharePoint DÉLÉGUÉ (compte de service) pour les pièces jointes
+        sp_user = get_secret("spusername")
+        sp_pass = get_secret("sppassword")
+        sp_token = get_sp_token(tenant_id, client_id, client_secret, sp_user, sp_pass)
+        sp_digest = get_form_digest(sp_token) if sp_token else None
         if not sp_token:
             logging.warning("Token SharePoint indisponible : les pièces jointes seront ignorées.")
 
@@ -676,14 +708,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             # Pièce jointe sur l'élément de liste (comme l'automate)
             attached = False
+            attach_detail = "token SharePoint indisponible" if not sp_token else "élément non créé"
             if sp_token and item_id:
-                attached = add_attachment(sp_token, commande_doc_list_id, item_id, nom_fichier, file_bytes)
+                attached, attach_detail = add_attachment(
+                    sp_token, sp_digest, commande_doc_list_id, item_id, nom_fichier, file_bytes)
 
             generated.append({
                 "site_stock": dest_name,
                 "filename": nom_fichier,
                 "created_item_id": item_id,
                 "attached": attached,
+                "attach_detail": attach_detail,
                 "nb_lignes": len(fiche_rows),
                 "nb_accessoires": len(accessoires_rows),
                 "nb_materiel": len(materiel_rows),
