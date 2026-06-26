@@ -187,6 +187,35 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         if not type_import:
             return json_response({"status": "error", "message": "La colonne 'Type_import' est vide sur la commande.", "cmd_id": cmd_title}, 400)
 
+        # --- NOUVEAU : DÉTECTION DU MAUVAIS FICHIER ---
+        is_excel = file_content.startswith(b'PK\x03\x04')
+        msg_erreur_modele = f"Le fichier que vous avez envoyé ne correspond pas au modèle attendu pour le type d'import '{type_import}'."
+
+        if type_import in ["Fichier prestation", "Fichier grossiste"] and not is_excel:
+            return json_response({"status": "erreur_fichier", "message": msg_erreur_modele, "details": "Format invalide (attendu: xlsx)", "cmd_id": cmd_title, "type_import": type_import}, 200)
+
+        if type_import in ["Fichier Finale3D", "Fichier pyromotion", "Fichier FWSIM"]:
+            if is_excel:
+                return json_response({"status": "erreur_fichier", "message": msg_erreur_modele, "details": "Format invalide (attendu: csv)", "cmd_id": cmd_title, "type_import": type_import}, 200)
+                
+            try:
+                csv_text = file_content.decode('utf-8') 
+            except UnicodeDecodeError:
+                try:
+                    csv_text = file_content.decode('latin-1')
+                except:
+                    csv_text = ""
+                    
+            first_lines = csv_text.lower()[:500]
+            
+            if type_import == "Fichier FWSIM":
+                if "module" not in first_lines and "pin" not in first_lines and "produit_id" not in first_lines:
+                    return json_response({"status": "erreur_fichier", "message": msg_erreur_modele, "details": "En-têtes FWSIM manquants", "cmd_id": cmd_title, "type_import": type_import}, 200)
+            elif type_import == "Fichier pyromotion":
+                if "ligne" not in first_lines:
+                    return json_response({"status": "erreur_fichier", "message": msg_erreur_modele, "details": "En-têtes Pyromotion manquants", "cmd_id": cmd_title, "type_import": type_import}, 200)
+        # ----------------------------------------------
+
 # --- 3. Purger les anciens détails ---
         logging.info(f"Purge des anciens détails pour CMD_ID: {cmd_title}")
         old_items = graph_filtered_items(site_id, details_list_id, token, f"fields/CMD_ID eq '{cmd_title}'")
@@ -232,9 +261,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 df_total = get_excel_table_as_df(file_content, 'TabTotal')
                 df_datas = get_excel_table_as_df(file_content, 'TabDatas')
             except ValueError as e:
-                return json_response({"status": "error", "message": str(e), "cmd_id": cmd_title, "type_import": type_import}, 400)
+                return json_response({"status": "erreur_fichier", "message": msg_erreur_modele, "details": str(e), "cmd_id": cmd_title, "type_import": type_import}, 200)
             except Exception as e:
-                return json_response({"status": "error", "message": "Fichier Excel invalide ou corrompu.", "details": str(e), "cmd_id": cmd_title, "type_import": type_import}, 400)
+                return json_response({"status": "erreur_fichier", "message": msg_erreur_modele, "details": str(e), "cmd_id": cmd_title, "type_import": type_import}, 200)
             
             total_prix_excel = str(df_total.iloc[0].get('TotalPrix', '')) if not df_total.empty else ""
 
