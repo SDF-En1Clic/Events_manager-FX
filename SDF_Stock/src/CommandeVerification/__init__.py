@@ -338,38 +338,81 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     usage_tracker[key_main] = deja_pris + quantite
                     continue
 
-                # --- SITE SECONDAIRE (Uniquement si absent du site 1 ou qté inventaire = 0) ---
-                if q_inv == 0 and site_stock_bis and site_stock_bis != "0":
-                    q_inv_bis = sum(
-                        parse_float(i["fields"].get("Quantite")) for i in inventaire
-                        if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock_bis
-                    )
-                    batiment_bis = None
-                    emplacement_bis = None
-                    for i in inventaire:
-                        f = i.get("fields", {})
-                        if f.get("Title") == reference and f.get("Site") == site_stock_bis:
-                            batiment_bis = f.get("Batiment")
-                            emplacement_bis = f.get("Emplacement")
-                            break
+                # --- SITE SECONDAIRE (Uniquement si absent du site 1 -> q_inv == 0) ---
+                if q_inv == 0:
+                    
+                    # 1. Si aucun site secondaire n'est encore défini, on cherche le premier site disponible
+                    if not site_stock_bis or site_stock_bis == "0":
+                        
+                        # On liste tous les autres sites où ce produit est recensé
+                        sites_possibles = set(
+                            i["fields"].get("Site") for i in inventaire 
+                            if i["fields"].get("Title") == reference and i["fields"].get("Site") != site_stock
+                        )
+                        
+                        site_trouve = None
+                        for s_cand in sites_possibles:
+                            if not s_cand or s_cand == "0": continue
+                            
+                            q_inv_cand = sum(parse_float(i["fields"].get("Quantite")) for i in inventaire if i["fields"].get("Title") == reference and i["fields"].get("Site") == s_cand)
+                            
+                            q_resa_cand = sum(
+                                parse_float(l["fields"].get("Quantite")) for l in all_details_history
+                                if l["fields"].get("Reference") == reference
+                                and l["fields"].get("Statut") in ["Reservé", "Préparé", "Sortie produits"]
+                                and (l["fields"].get("Site") == s_cand)
+                                and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
+                            )
+                            
+                            key_cand = f"{reference}_sec_{s_cand}"
+                            deja_pris_cand = usage_tracker.get(key_cand, 0.0)
+                            dispo_cand = q_inv_cand - q_resa_cand - deja_pris_cand
+                            
+                            # Si on a assez de stock disponible sur ce site candidat, on le sélectionne
+                            if dispo_cand >= quantite:
+                                site_trouve = s_cand
+                                break
+                        
+                        # Si on a trouvé un site capable de fournir le produit, il devient le site secondaire de toute la commande
+                        if site_trouve:
+                            site_stock_bis = site_trouve
+                            
+                            # Enregistrement dans SharePoint (Liste Commandes)
+                            graph_update_field(site_id, commandes_list_id, commande_id, token, {"Site_Stock_second": site_stock_bis})
+                            logging.info(f"Produit {reference} absent du site 1. Site secondaire assigné automatiquement : {site_stock_bis}")
 
-                    q_resa_bis = sum(
-                        parse_float(l["fields"].get("Quantite")) for l in all_details_history
-                        if l["fields"].get("Reference") == reference
-                        and l["fields"].get("Statut") in ["Reservé", "Préparé", "Sortie produits"]
-                        and (l["fields"].get("Site") == site_stock_bis)
-                        and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
-                    )
+                    # 2. Si un site secondaire est défini (soit par Power Apps avant, soit par la recherche juste au-dessus)
+                    if site_stock_bis and site_stock_bis != "0":
+                        q_inv_bis = sum(
+                            parse_float(i["fields"].get("Quantite")) for i in inventaire
+                            if i["fields"].get("Title") == reference and i["fields"].get("Site") == site_stock_bis
+                        )
+                        batiment_bis = None
+                        emplacement_bis = None
+                        for i in inventaire:
+                            f = i.get("fields", {})
+                            if f.get("Title") == reference and f.get("Site") == site_stock_bis:
+                                batiment_bis = f.get("Batiment")
+                                emplacement_bis = f.get("Emplacement")
+                                break
 
-                    key_sec = f"{reference}_sec_{site_stock_bis}"
-                    deja_pris_sec = usage_tracker.get(key_sec, 0.0)
-                    dispo_bis = q_inv_bis - q_resa_bis - deja_pris_sec
+                        q_resa_bis = sum(
+                            parse_float(l["fields"].get("Quantite")) for l in all_details_history
+                            if l["fields"].get("Reference") == reference
+                            and l["fields"].get("Statut") in ["Reservé", "Préparé", "Sortie produits"]
+                            and (l["fields"].get("Site") == site_stock_bis)
+                            and (l["fields"].get("Statut") != "Sortie produits" or l["fields"].get("Comptabilise_inventaire") != 1)
+                        )
 
-                    if dispo_bis >= quantite:
-                        graph_update_field(site_id, details_list_id, item_id, token, 
-                            {"Statut": "Disponible", "Site": site_stock_bis, "Batiment": batiment_bis, "Emplacement": emplacement_bis})
-                        usage_tracker[key_sec] = deja_pris_sec + quantite
-                        continue
+                        key_sec = f"{reference}_sec_{site_stock_bis}"
+                        deja_pris_sec = usage_tracker.get(key_sec, 0.0)
+                        dispo_bis = q_inv_bis - q_resa_bis - deja_pris_sec
+
+                        if dispo_bis >= quantite:
+                            graph_update_field(site_id, details_list_id, item_id, token, 
+                                {"Statut": "Disponible", "Site": site_stock_bis, "Batiment": batiment_bis, "Emplacement": emplacement_bis})
+                            usage_tracker[key_sec] = deja_pris_sec + quantite
+                            continue
 
                 # --- ARRIVAGES (SDF) ---
                 q_arriv = sum(
