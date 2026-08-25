@@ -7,7 +7,8 @@
     "CommandeReception",
     "CommandeImportation",
     "GenerationDocument",
-    "GenerationFichePrepa"
+    "GenerationFichePrepa",
+    "GenerationCerfa"
   ],
   "logging": {
     "applicationInsights": {
