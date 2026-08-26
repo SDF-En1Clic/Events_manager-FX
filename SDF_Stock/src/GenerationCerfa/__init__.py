@@ -473,6 +473,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "filename": nom_fichier,
                 "folder": TARGET_FOLDER,
                 "ID_evt": id_affaire,
+                "nom_evt": nom_evt,
+                "commune": commune,
                 "ID_devis": entier_texte(devis.get("id")),
                 "devis_num": texte(devis.get("Title")),
                 "entite": entite,
