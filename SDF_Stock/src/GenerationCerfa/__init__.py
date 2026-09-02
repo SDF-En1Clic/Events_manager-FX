@@ -5,11 +5,13 @@ from azure.keyvault.secrets import SecretClient
 import requests
 import urllib.parse
 import json
+import base64
 import io
 import re
 from datetime import datetime, timezone
 
-from pypdf import PdfReader, PdfWriter
+from PIL import Image
+from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import NameObject, TextStringObject
 
 # --------- CONFIG GLOBALE -------------
@@ -34,6 +36,8 @@ CHAMP_MASSE_ACTIVE = "kg"
 CHAMP_CALIBRE_MAX = "Calibre maximum mis en œuvre durant le spectacle pyrotechnique"
 CHAMP_DECLARANT = "Je déclare sur lhonneur M ou Mme Représentant du prestataire"
 CHAMP_DATE_DECLARATION = "date_es_:date"
+# Section 7 « SIGNATURE », page 4 : « Signature et cachet du représentant légal du prestataire ».
+CHAMP_SIGNATURE = "Signature26_es_:signer:signature"
 
 CASE_MASSE_SUP_35 = "Check Box10"
 CASE_MASSE_INF_35 = "Check Box11"
@@ -299,6 +303,56 @@ def remplir_pdf(template_bytes, valeurs):
     return sortie.getvalue()
 
 
+def rectangle_champ(reader, nom_champ):
+    """Renvoie (index_page, x0, y0, x1, y1) du champ demandé, ou None."""
+    for index, page in enumerate(reader.pages):
+        for annot_ref in page.get("/Annots", []) or []:
+            annot = annot_ref.get_object()
+            if nom_complet_champ(annot) == nom_champ and "/Rect" in annot:
+                r = [float(v) for v in annot["/Rect"]]
+                return index, min(r[0], r[2]), min(r[1], r[3]), max(r[0], r[2]), max(r[1], r[3])
+    return None
+
+
+def apposer_signature(pdf_bytes, image_bytes):
+    """
+    Incruste l'image de signature dans le cadre du champ de signature du CERFA.
+
+    L'image est réduite pour tenir dans le cadre en conservant ses proportions,
+    puis centrée. Renvoie (pdf, True) si la signature a été posée.
+    """
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    cadre = rectangle_champ(reader, CHAMP_SIGNATURE)
+    if cadre is None:
+        logging.warning(f"Champ « {CHAMP_SIGNATURE} » absent du modèle : signature non apposée.")
+        return pdf_bytes, False
+
+    index, x0, y0, x1, y1 = cadre
+    largeur_cadre, hauteur_cadre = x1 - x0, y1 - y0
+
+    image = Image.open(io.BytesIO(image_bytes))
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+    echelle = min(largeur_cadre / image.width, hauteur_cadre / image.height)
+    largeur, hauteur = image.width * echelle, image.height * echelle
+
+    # Pillow fixe la taille de page du PDF via la résolution : largeur_pt = largeur_px / dpi * 72
+    calque = io.BytesIO()
+    image.save(calque, "PDF", resolution=image.width * 72.0 / largeur)
+    calque.seek(0)
+
+    # Calée à gauche du cadre, sous le libellé « Signature et cachet », et centrée en hauteur.
+    writer = PdfWriter(clone_from=reader)
+    writer.pages[index].merge_transformed_page(
+        PdfReader(calque).pages[0],
+        Transformation().translate(x0 + 4, y0 + (hauteur_cadre - hauteur) / 2),
+    )
+    sortie = io.BytesIO()
+    writer.write(sortie)
+    logging.info(f"Signature apposée page {index + 1}, {largeur:.0f}x{hauteur:.0f} pt.")
+    return sortie.getvalue(), True
+
+
 # ======================================================================================
 # Point d'entrée
 # ======================================================================================
@@ -311,8 +365,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         id_affaire = body.get("ID_evt") or body.get("ID_aff")
         id_devis_force = body.get("ID_devis")
+        interlocuteur_fourni = texte(body.get("interlocuteur"))
+        signature_base64 = texte(body.get("signature_base64"))
 
-        logging.info(f"Paramètres reçus : ID_evt={id_affaire}, ID_devis={id_devis_force}")
+        logging.info(f"Paramètres reçus : ID_evt={id_affaire}, ID_devis={id_devis_force}, "
+                     f"interlocuteur={interlocuteur_fourni or '(déduit du client)'}, "
+                     f"signature={'fournie' if signature_base64 else 'absente'}")
         if not id_affaire:
             return reponse_erreur("parametre_manquant", "Le paramètre 'ID_evt' est requis.", 400)
         if nombre(id_affaire) is None:
@@ -395,10 +453,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         else:
             logging.warning(f"Devis {devis.get('Title')} sans département (colonne Reference).")
 
-        # 5. Interlocuteur SdF, porté par la fiche client
-        interlocuteur = ""
+        # 5. Interlocuteur SdF : celui transmis par l'appelant fait foi — c'est lui qui a
+        #    servi à choisir la signature — sinon on le déduit de la fiche client.
+        interlocuteur = interlocuteur_fourni
         id_client = entier_texte(affaire.get("Client_ID"))
-        if id_client:
+        if not interlocuteur and id_client:
             client = graph_get_item_by_id(site_id, clients_list_id, id_client, token)
             if client:
                 interlocuteur = texte(client.get("Interlocuteur")) or texte(client.get("Interlocuteur_delegue"))
@@ -425,9 +484,20 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             CASE_SANS_NIVEAU: ETAT_DECOCHE,
         }
 
-        # 7. Génération du PDF
+        # 7. Génération du PDF, puis apposition de la signature si elle a été transmise
         template_bytes = download_graph_file(site_id, token, f"{TEMPLATE_FOLDER}/{modele}")
         pdf_bytes = remplir_pdf(template_bytes, valeurs)
+
+        signature_apposee = False
+        if signature_base64:
+            try:
+                pdf_bytes, signature_apposee = apposer_signature(
+                    pdf_bytes, base64.b64decode(signature_base64))
+            except Exception as e:
+                logging.error(f"Signature inexploitable, CERFA généré sans signature : {e}")
+        else:
+            logging.warning(f"Aucune signature transmise pour « {interlocuteur or 'interlocuteur inconnu'} » : "
+                            "le CERFA devra être signé manuellement.")
 
         # 8. Dépôt du fichier et création de l'élément de liste
         annee = format_date(affaire.get("Date_evt"))[-4:] or str(aujourd_hui.year)
@@ -475,6 +545,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "ID_evt": id_affaire,
                 "nom_evt": nom_evt,
                 "commune": commune,
+                "interlocuteur": interlocuteur,
+                "signature_apposee": "true" if signature_apposee else "false",
                 "ID_devis": entier_texte(devis.get("id")),
                 "devis_num": texte(devis.get("Title")),
                 "entite": entite,
