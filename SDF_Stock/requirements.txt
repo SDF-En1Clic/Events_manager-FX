@@ -8,3 +8,4 @@ pandas
 openpyxl
 pypdf==6.12.2
 pillow==12.1.1
+reportlab==4.5.1

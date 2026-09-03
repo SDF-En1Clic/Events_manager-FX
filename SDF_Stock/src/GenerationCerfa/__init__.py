@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from PIL import Image
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import NameObject, TextStringObject
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 # --------- CONFIG GLOBALE -------------
 VAULT_URL = "https://events-manager-kv.vault.azure.net/"
@@ -50,6 +54,20 @@ ETAT_DECOCHE = "Off"
 
 SEUIL_MASSE_ACTIVE = 35      # kg : au-delà, la case "plus de 35 kg" est cochée
 SEUIL_CALIBRE_NIVEAU_2 = 100  # mm : à partir de ce calibre, niveau 2 au lieu de niveau 1
+
+# --- Annexe « liste des produits » du dossier préfecture -----------------------------
+# Catalogue complet filtré sur la distance de sécurité du spectacle, comme dans l'outil
+# Excel : ce ne sont pas les produits du devis, mais ceux susceptibles d'être mis en œuvre.
+TYPE_DOC_PRODUITS = "Liste produits CERFA"
+COLONNES_PRODUITS = [
+    ("Désignation produit", "Description_ukoba", 330),
+    ("Calibre", "Cal", 60),
+    ("Classification", "Cl", 90),
+    ("Numéro de certification", "Num_agrement", 160),
+    ("Distance de sécurité", "Dist_securite", 110),
+]
+DISTANCE_PAR_DEFAUT = 1000  # mètres, repli de l'outil Excel quand la distance est vide
+BLEU_SDF = colors.HexColor("#0094D2")
 # --------------------------------------
 
 session = requests.Session()
@@ -223,6 +241,89 @@ def choisir_devis(devis_list):
     return max(reels, key=lambda d: (annee_devis(d), int(nombre(d.get("id")) or 0)))
 
 
+def selectionner_produits(produits, distance_max):
+    """
+    Règle reprise de l'outil Excel : on retient les produits dont la distance de sécurité
+    est inférieure ou égale à celle du spectacle, en écartant toute ligne dont l'une des
+    cinq colonnes de l'annexe est vide.
+    """
+    retenus = []
+    for produit in produits:
+        if any(produit.get(champ) in (None, "") for _, champ, _ in COLONNES_PRODUITS):
+            continue
+        distance = nombre(produit.get("Dist_securite"))
+        if distance is None or distance > distance_max:
+            continue
+        retenus.append(produit)
+    return retenus
+
+
+def construire_pdf_produits(produits, masse_active, categories):
+    """Annexe « liste des produits » en PDF paysage, en-tête de tableau répété à chaque page."""
+    tampon = io.BytesIO()
+    document = SimpleDocTemplate(
+        tampon, pagesize=landscape(A4),
+        leftMargin=28, rightMargin=28, topMargin=28, bottomMargin=28,
+        title="Liste des produits", author="Soirs de Fêtes")
+
+    style_titre = ParagraphStyle("titre", fontName="Helvetica", fontSize=10, leading=14)
+    style_cellule = ParagraphStyle("cellule", fontName="Helvetica", fontSize=7.5, leading=9)
+
+    lignes = [[libelle for libelle, _, _ in COLONNES_PRODUITS]]
+    for produit in produits:
+        lignes.append([
+            Paragraph(texte(produit.get("Description_ukoba")), style_cellule),
+            entier_texte(produit.get("Cal")),
+            texte(produit.get("Cl")),
+            texte(produit.get("Num_agrement")),
+            entier_texte(produit.get("Dist_securite")),
+        ])
+
+    tableau = Table(lignes, colWidths=[largeur for _, _, largeur in COLONNES_PRODUITS],
+                    repeatRows=1)
+    tableau.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), BLEU_SDF),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#9D9C9C")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F9FD")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+
+    document.build([
+        Paragraph(f"<b>Types d'artifice :</b> {categories}", style_titre),
+        Paragraph(f"<b>Quantité totale de matière active :</b> {masse_active}", style_titre),
+        Spacer(1, 10),
+        tableau,
+    ])
+    return tampon.getvalue()
+
+
+def deposer_fichier(site_id, token, nom_fichier, contenu, content_type):
+    """Dépose le fichier dans le dossier cible et renvoie (drive_item_id, file_list_item_id)."""
+    url_upload = (f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/"
+                  f"{TARGET_FOLDER}/{urllib.parse.quote(nom_fichier, safe='')}:/content")
+    res = session.put(url_upload, headers={"Authorization": f"Bearer {token}",
+                                           "Content-Type": content_type}, data=contenu)
+    res.raise_for_status()
+    drive_item_id = res.json().get("id", "")
+
+    file_list_item_id = ""
+    try:
+        url_list_item = (f"https://graph.microsoft.com/v1.0/sites/{site_id}"
+                         f"/drive/items/{drive_item_id}?$expand=listItem")
+        res_li = session.get(url_list_item, headers={"Authorization": f"Bearer {token}"})
+        if res_li.ok:
+            file_list_item_id = res_li.json().get("listItem", {}).get("id", "")
+    except Exception as e:
+        logging.warning(f"Impossible de récupérer le listItemId de {nom_fichier} : {e}")
+    return drive_item_id, file_list_item_id
+
+
 def reponse_erreur(code, message, status_code, **extra):
     """Réponse d'erreur normalisée : `message` est directement affichable dans l'app."""
     logging.warning(f"{code} : {message}")
@@ -386,6 +487,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         devis_list_id = get_secret("devislistid")
         clients_list_id = get_secret("clientslistid")
         prefectures_list_id = get_secret("prefectureslistid")
+        produits_list_id = get_secret("produitslistid")
         affaire_doc_list_id = get_secret("affaireevtsdoclistid")
 
         token = get_graph_token(tenant_id, client_id, client_secret)
@@ -512,29 +614,41 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         })
 
         ensure_folder(site_id, token, TARGET_FOLDER)
-        url_upload = (f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/"
-                      f"{TARGET_FOLDER}/{urllib.parse.quote(nom_fichier, safe='')}:/content")
-        res_upload = session.put(url_upload, headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/pdf"
-        }, data=pdf_bytes)
-        res_upload.raise_for_status()
-        drive_item_id = res_upload.json().get("id", "")
+        drive_item_id, file_list_item_id = deposer_fichier(
+            site_id, token, nom_fichier, pdf_bytes, "application/pdf")
 
-        file_list_item_id = ""
-        try:
-            url_list_item = (f"https://graph.microsoft.com/v1.0/sites/{site_id}"
-                             f"/drive/items/{drive_item_id}?$expand=listItem")
-            res_li = session.get(url_list_item, headers={"Authorization": f"Bearer {token}"})
-            if res_li.ok:
-                file_list_item_id = res_li.json().get("listItem", {}).get("id", "")
-        except Exception as e:
-            logging.warning(f"Impossible de récupérer le listItemId du fichier : {e}")
+        # 9. Annexe « liste des produits », second document du dossier préfecture
+        distance = nombre(affaire.get("Distance_securite")) or DISTANCE_PAR_DEFAUT
+        if not nombre(affaire.get("Distance_securite")):
+            logging.warning(f"Affaire {id_affaire} sans distance de sécurité : "
+                            f"repli sur {DISTANCE_PAR_DEFAUT} m.")
+
+        produits = graph_filtered_items(site_id, produits_list_id, token)
+        retenus = selectionner_produits(produits, distance)
+        logging.info(f"{len(retenus)} produits retenus sur {len(produits)} "
+                     f"pour une distance de sécurité de {distance:.0f} m.")
+
+        libelle_produits = re.sub(
+            r'[\\/:*?"<>|]', " ",
+            f"Produits - {annee}-{initiales(interlocuteur)}-{commune}").strip()
+        nom_fichier_produits = f"{libelle_produits}_{aujourd_hui.strftime('%Y-%m-%d-%H-%M-%S')}.pdf"
+
+        categories = ", ".join(sorted({texte(p.get("Cl")) for p in retenus if texte(p.get("Cl"))}))
+        pdf_produits = construire_pdf_produits(
+            retenus, format_masse_active(masse_active), categories)
+
+        item_id_produits = graph_post_item(site_id, affaire_doc_list_id, token, {
+            "Title": libelle_produits,
+            "Aff_ID": id_affaire,
+            "Type_doc": TYPE_DOC_PRODUITS,
+        })
+        drive_item_id_produits, file_list_item_id_produits = deposer_fichier(
+            site_id, token, nom_fichier_produits, pdf_produits, "application/pdf")
 
         return func.HttpResponse(
             json.dumps({
                 "status": "success",
-                "message": f"Le CERFA de l'affaire {nom_evt or id_affaire} a été généré.",
+                "message": f"Le CERFA de l'affaire {nom_evt or id_affaire} a été généré, accompagné de la liste des {len(retenus)} produits.",
                 "created_item_id": item_id,
                 "item_id": item_id,
                 "Type_Doc": TYPE_DOC,
@@ -547,6 +661,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "commune": commune,
                 "interlocuteur": interlocuteur,
                 "signature_apposee": "true" if signature_apposee else "false",
+                "produits_item_id": item_id_produits,
+                "produits_filename": nom_fichier_produits,
+                "produits_drive_item_id": drive_item_id_produits,
+                "produits_file_list_item_id": file_list_item_id_produits,
+                "nb_produits": str(len(retenus)),
+                "distance_securite": entier_texte(distance),
                 "ID_devis": entier_texte(devis.get("id")),
                 "devis_num": texte(devis.get("Title")),
                 "entite": entite,
